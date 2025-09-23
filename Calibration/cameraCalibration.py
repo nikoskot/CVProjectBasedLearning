@@ -56,27 +56,115 @@ def showImagesInGrid(images):
     cv.waitKey(0)
     cv.destroyAllWindows()
 
+def computeHomography(worldCoords, imageCoords):
+
+    n = worldCoords.shape[0]
+    A = []
+
+    for i in range(n):
+        X, Y = worldCoords[i, 0], worldCoords[i, 1]
+        u, v = imageCoords[i, 0], imageCoords[i, 1]
+
+        A.append([X, Y, 1, 0, 0, 0, -u*X, -u*Y, -u])
+        A.append([0, 0, 0, X, Y, 1, -v*X, -v*Y, -v])
+    
+    A = np.array(A)
+    _, _, Vh = np.linalg.svd(A)
+    h = Vh[-1]
+    H = np.array(h.reshape(3, 3))
+
+    return H / H[2, 2]
+
+def reprojection_error(world_pts, image_pts, K, R, t):
+    # world_pts Nx3 (or Nx2 with z=0)
+    pts_h = np.hstack([world_pts, np.zeros((world_pts.shape[0],1))]) if world_pts.shape[1]==2 else world_pts
+    projected = []
+    for X in pts_h:
+        X_h = X.reshape(3,1)
+        x_cam = R @ X_h + t.reshape(3,1)
+        x = K @ x_cam
+        u = x[0]/x[2]; v = x[1]/x[2]
+        projected.append([u.item(), v.item()])
+    projected = np.array(projected)
+    err = np.linalg.norm(projected - image_pts, axis=1)
+    return err.mean(), err.std()
+
 def calibrateSingleCamera():
 
-    worldCoords = np.zeros((8*6,3), np.float32)
-    worldCoords[:,:2] = np.mgrid[0:8,0:6].T.reshape(-1,2)
+    worldCoords = np.zeros((7*6,3), np.float32)
+    worldCoords[:,:2] = np.mgrid[0:7,0:6].T.reshape(-1,2)
     imageCoords = []
 
     images = loadCalibrationImages("left")
     showImagesInGrid(images)
 
+    V = []
+    Hs = []
+
     for img in images:
 
-        ret, corners = cv.findChessboardCorners(img, (8, 6))
-        if ret:
-            cv.drawChessboardCorners(img, (8, 6), corners, ret)
-            cv.imshow("Annotated corners", img)
-            cv.waitKey(500)
-            cv.destroyAllWindows()
+        ret, corners = cv.findChessboardCorners(img, (7, 6))
+        if not ret:
+            continue
 
-            imageCoords.append(corners)
-    
+        cv.drawChessboardCorners(img, (7, 6), corners, ret)
+        cv.imshow("Annotated corners", img)
+        cv.waitKey(500)
+        cv.destroyAllWindows()
 
+        imageCoords.append(corners.reshape(-1, 2))
+
+        # Compute homographies for current image
+        H = computeHomography(worldCoords, imageCoords[-1])
+        Hs.append(H)
+
+        v12 = np.array([H[0, 0]*H[1, 0], H[0, 0]*H[1, 1] + H[0, 1]*H[1, 0], H[0, 1]*H[1, 1], H[0, 2]*H[1, 0] + H[0, 0]*H[1, 2], H[0, 2]*H[1, 1] + H[0, 1]*H[1, 2], H[0, 2]*H[1, 2]])
+        v11 = np.array([H[0, 0]*H[0, 0], H[0, 0]*H[0, 1] + H[0, 1]*H[0, 0], H[0, 1]*H[0, 1], H[0, 2]*H[0, 0] + H[0, 0]*H[0, 2], H[0, 2]*H[0, 1] + H[0, 1]*H[0, 2], H[0, 2]*H[0, 2]])
+        v22 = np.array([H[1, 0]*H[1, 0], H[1, 0]*H[1, 1] + H[1, 1]*H[1, 0], H[1, 1]*H[1, 1], H[1, 2]*H[1, 0] + H[1, 0]*H[1, 2], H[1, 2]*H[1, 1] + H[1, 1]*H[1, 2], H[1, 2]*H[1, 2]])
+
+        V.append(v12)
+        V.append((v11 - v22))
+
+    V = np.array(V)
+    _, _, Vh = np.linalg.svd(V)
+    b = Vh[-1]
+
+    v0 = (b[1]*b[3] - b[0]*b[4]) / (b[0]*b[2] - b[1]**2)
+    l = b[5] - ((b[3]**2 + v0*(b[1]*b[3] - b[0]*b[4])) / b[0])
+    alpha = np.sqrt(l / b[0])
+    beta = np.sqrt(l*b[0] / (b[0]*b[2] - b[1]**2))
+    c = -b[1]* alpha**2 * beta / l
+    u0 = c * v0 / alpha - b[3] * alpha**2 / l
+
+    K = np.array([
+        [alpha, c, u0],
+        [0, beta, v0],
+        [0, 0, 1]
+    ])
+
+    print(f"Intrinsic Matrix K: \n {K}")
+
+    Rs = []
+    ts = []
+    for i in range(len(Hs)):
+        h1 = Hs[i][:, 0]
+        h2 = Hs[i][:, 1]
+        h3 = Hs[i][:, 2]
+
+        lam = 1 / np.linalg.norm(np.linalg.inv(K).dot(h1))
+
+        r1 = lam * np.linalg.inv(K).dot(h1)
+        r2 = lam * np.linalg.inv(K).dot(h2)
+        r3 = np.cross(r1, r2)
+        t = lam * np.linalg.inv(K).dot(h3)
+        R = np.column_stack((r1, r2, r3))
+        Rs.append(R)
+        ts.append(t)
+        print(f"Rotation Matrix of {i}: \n {R}")
+        print(f"Translation vector of {i}: \n {t}")
+
+        mean_err, std_err = reprojection_error(worldCoords, imageCoords[i], K, R, t)
+        print(f"{i} -> mean reprojection err = {mean_err:.3f}px, std = {std_err:.3f}px")
 
 if __name__ == "__main__":
     calibrateSingleCamera()
