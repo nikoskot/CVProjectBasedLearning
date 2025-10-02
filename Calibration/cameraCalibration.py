@@ -1,6 +1,8 @@
 import cv2 as cv
 import os
 import numpy as np
+from scipy.optimize import least_squares
+import time
 
 CALIBRATION_IMAGES_FOLDER_NAME = "calibrationImages"
 
@@ -75,52 +77,35 @@ def computeHomography(worldCoords, imageCoords):
 
     return H / H[2, 2]
 
-def reprojection_error(world_pts, image_pts, K, R, t):
-    # world_pts Nx3 (or Nx2 with z=0)
-    pts_h = np.hstack([world_pts, np.zeros((world_pts.shape[0],1))]) if world_pts.shape[1]==2 else world_pts
-    projected = []
-    for X in pts_h:
-        X_h = X.reshape(3,1)
-        x_cam = R @ X_h + t.reshape(3,1)
-        x = K @ x_cam
-        u = x[0]/x[2]; v = x[1]/x[2]
-        projected.append([u.item(), v.item()])
-    projected = np.array(projected)
-    err = np.linalg.norm(projected - image_pts, axis=1)
-    return err.mean(), err.std()
+def v_from_H(H, i, j):
+    # generic builder using columns hi and hj
+    hi = H[:, i]
+    hj = H[:, j]
+    return np.array([
+        hi[0]*hj[0],
+        hi[0]*hj[1] + hi[1]*hj[0],
+        hi[1]*hj[1],
+        hi[2]*hj[0] + hi[0]*hj[2],
+        hi[2]*hj[1] + hi[1]*hj[2],
+        hi[2]*hj[2]
+    ])
 
-def calibrateSingleCamera():
-
-    worldCoords = np.zeros((7*6,3), np.float32)
-    worldCoords[:,:2] = np.mgrid[0:7,0:6].T.reshape(-1,2)
-    imageCoords = []
-
-    images = loadCalibrationImages("left")
-    showImagesInGrid(images)
+def manualSingleCameraCacibration(images, worldCoords, imageCoords, CompareWithOpenCV=False):
 
     V = []
     Hs = []
 
-    for img in images:
-
-        ret, corners = cv.findChessboardCorners(img, (7, 6))
-        if not ret:
-            continue
-
-        cv.drawChessboardCorners(img, (7, 6), corners, ret)
-        cv.imshow("Annotated corners", img)
-        cv.waitKey(500)
-        cv.destroyAllWindows()
-
-        imageCoords.append(corners.reshape(-1, 2))
-
+    for i in range(len(worldCoords)):
         # Compute homographies for current image
-        H = computeHomography(worldCoords, imageCoords[-1])
+        H = computeHomography(worldCoords[i], imageCoords[i])
+        if CompareWithOpenCV:
+            print(f"Homography (manual) of image {i}: \n {H}")
+            print(f"Homography (opencv) of image {i}: \n {cv.findHomography(worldCoords[i][:, :2], imageCoords[i][:, :2])[0]}")
         Hs.append(H)
 
-        v12 = np.array([H[0, 0]*H[1, 0], H[0, 0]*H[1, 1] + H[0, 1]*H[1, 0], H[0, 1]*H[1, 1], H[0, 2]*H[1, 0] + H[0, 0]*H[1, 2], H[0, 2]*H[1, 1] + H[0, 1]*H[1, 2], H[0, 2]*H[1, 2]])
-        v11 = np.array([H[0, 0]*H[0, 0], H[0, 0]*H[0, 1] + H[0, 1]*H[0, 0], H[0, 1]*H[0, 1], H[0, 2]*H[0, 0] + H[0, 0]*H[0, 2], H[0, 2]*H[0, 1] + H[0, 1]*H[0, 2], H[0, 2]*H[0, 2]])
-        v22 = np.array([H[1, 0]*H[1, 0], H[1, 0]*H[1, 1] + H[1, 1]*H[1, 0], H[1, 1]*H[1, 1], H[1, 2]*H[1, 0] + H[1, 0]*H[1, 2], H[1, 2]*H[1, 1] + H[1, 1]*H[1, 2], H[1, 2]*H[1, 2]])
+        v12 = v_from_H(H, 0, 1)
+        v11 = v_from_H(H, 0, 0)
+        v22 = v_from_H(H, 1, 1)
 
         V.append(v12)
         V.append((v11 - v22))
@@ -142,8 +127,6 @@ def calibrateSingleCamera():
         [0, 0, 1]
     ])
 
-    print(f"Intrinsic Matrix K: \n {K}")
-
     Rs = []
     ts = []
     for i in range(len(Hs)):
@@ -158,15 +141,199 @@ def calibrateSingleCamera():
         r3 = np.cross(r1, r2)
         t = lam * np.linalg.inv(K).dot(h3)
         R = np.column_stack((r1, r2, r3))
+        U, _, Vt = np.linalg.svd(R)
+        R = U @ Vt
         Rs.append(R)
         ts.append(t)
-        print(f"Rotation Matrix of {i}: \n {R}")
-        print(f"Translation vector of {i}: \n {t}")
 
-        mean_err, std_err = reprojection_error(worldCoords, imageCoords[i], K, R, t)
-        print(f"{i} -> mean reprojection err = {mean_err:.3f}px, std = {std_err:.3f}px")
+    opencvK, opencvRs, opencvTs = None, None, None
+    print(f"K matrix (manual): \n {K}")
+    if CompareWithOpenCV:
+        _, opencvK, opencvDist, opencvRs, opencvTs = cv.calibrateCamera(worldCoords, imageCoords, images[0].shape[0:2], None, None)
+        print(f"K matrix (opencv): \n {opencvK}")
+        for i in range(len(Rs)):
+            print(f"Rotation Matrix (manual) of {i}: \n {Rs[i]}")
+            print(f"Rotation Matrix (opencv) of {i}: \n {cv.Rodrigues(opencvRs[i])[0]}")
+            print(f"Translation vector (manual) of {i}: \n {ts[i]}")
+            print(f"Translation vector (opencv) of {i}: \n {opencvTs[i]}")
+
+    result = least_squares(distortionCalculationReprojectionError, 
+                           x0=[0 ,0, 0, 0], 
+                           args=(worldCoords, imageCoords, K, Rs, ts), 
+                           # jac='2-point',
+                           method='lm',             # or 'lm' if no bounds
+                            verbose=2,
+                            # x_scale='jac',            # automatic scaling by Jacobian
+                            # loss='huber',           # robust loss to downweight outliers
+                            max_nfev=2000,
+                            ftol=1e-15,
+                            xtol=1e-9,
+                            gtol=1e-9)
+    distortionCoeffs = result.x
+    print(f"Manual {distortionCoeffs}")
+
+    return K, Rs, ts, distortionCoeffs
+
+def opencvSingleCameraCalibration(images, worldCoords, imageCoords):
+ 
+    _, opencvK, opencvDist, opencvRs, opencvTs = cv.calibrateCamera(worldCoords, imageCoords, images[0].shape[:-1], None, None)
+    print(f"K matrix (opencv): \n {opencvK}")
+    
+    return opencvK, opencvRs, opencvTs, opencvDist
+
+def reprojectionError(world_pts, image_pts, K, R, t):
+    # world_pts Nx3 (or Nx2 with z=0)
+    pts_h = np.hstack([world_pts, np.zeros((world_pts.shape[0],1))]) if world_pts.shape[1]==2 else world_pts
+    projected = []
+    for X in pts_h:
+        X_h = X.reshape(3,1)
+        x_cam = R @ X_h + t.reshape(3,1)
+        x = K @ x_cam
+        u = x[0]/x[2]; v = x[1]/x[2]
+        projected.append([u.item(), v.item()])
+    projected = np.array(projected)
+    err = np.linalg.norm(projected - image_pts, axis=1)
+    return err.mean(), err.std()
+
+def reprojectionError2(worldCoords, imageCoords, K, Rs, Ts, distCoeffs=np.array([])):
+    mean_error = 0
+    for i in range(len(worldCoords)):
+        imgpoints2, _ = cv.projectPoints(worldCoords[i], Rs[i], Ts[i], K, distCoeffs)
+        error = cv.norm(imageCoords[i], imgpoints2.squeeze(), cv.NORM_L2)/len(imgpoints2)
+        mean_error += error
+    
+    return mean_error/len(worldCoords)
+
+def distortionCalculationReprojectionError(dist_coeffs, worldCoords, imageCoords, K, Rs, Ts):
+    errors = []
+    k1, k2, p1, p2 = dist_coeffs
+    
+    for R, t, img_points, world_points in zip(Rs, Ts, imageCoords, worldCoords):
+        for X, uv_obs in zip(world_points, img_points):
+            # project to camera coords
+            Xc = R @ X + t
+            x, y = Xc[0]/Xc[2], Xc[1]/Xc[2]   # normalized
+
+            # radial distortion
+            r2 = x*x + y*y
+            x_rad = x * (1 + k1*r2 + k2*(r2**2))
+            y_rad = y * (1 + k1*r2 + k2*(r2**2))
+
+            # tangential distortion
+            x_tan = 2*p1*x*y + p2*(r2 + 2*x*x)
+            y_tan = p1*(r2 + 2*y*y) + 2*p2*x*y
+
+            x_d = x_rad + x_tan
+            y_d = y_rad + y_tan
+
+            # pixel coords
+            u_pred = K[0,0]*x_d + K[0,1]*y_d + K[0,2]
+            v_pred = K[1,1]*y_d + K[1,2]
+
+            # residual
+            u_obs, v_obs = uv_obs
+            # errors.append(u_obs - u_pred)
+            # errors.append(v_obs - v_pred)
+            errors.append(np.linalg.norm(np.array([u_obs, v_obs]) - np.array([u_pred, v_pred])))
+    
+    return np.array(errors)
+
+def distortionCalculationReprojectionError2(dist_coeffs, worldCoords, imageCoords, K, Rs, Ts):
+    errors = []
+    for i in range(len(worldCoords)):
+        imgpoints2, _ = cv.projectPoints(worldCoords[i], Rs[i], Ts[i], K, dist_coeffs)
+        imgpoints2 = imgpoints2.squeeze()
+        for obs, pred in zip(imageCoords[i], imgpoints2):
+            # errors.append((obs[0] - pred[0])**2)
+            # errors.append((obs[1] - pred[1])**2)
+            errors.append(np.linalg.norm(obs - pred))
+    return np.array(errors)
+
+N_CORNERS_PER_ROW = 9
+N_CORNERS_PER_COL = 6
+REFINE_CORNERS_FLAG = True
+def calibrateSingleCamera(images):
+
+    worldCoordsSingle = np.zeros((N_CORNERS_PER_ROW*N_CORNERS_PER_COL, 3), np.float32)
+    worldCoordsSingle[:, :2] = np.mgrid[0:N_CORNERS_PER_ROW, 0:N_CORNERS_PER_COL].T.reshape(-1, 2)
+    imageCoords = [] 
+    worldCoords = []
+
+    for i, img in enumerate(images):
+        # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        ret, corners = cv.findChessboardCorners(img, (N_CORNERS_PER_ROW, N_CORNERS_PER_COL))
+        if not ret:
+            print(f"No chessboard corners found in image {i}")
+            cv.imshow(f"No corners {i}", img)
+            cv.waitKey(1000)
+            cv.destroyAllWindows()
+            continue
+        
+        if REFINE_CORNERS_FLAG:
+            corners = cv.cornerSubPix(cv.cvtColor(img, cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            # corners = cv.cornerSubPix(img, corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            
+        cv.drawChessboardCorners(img, (N_CORNERS_PER_ROW, N_CORNERS_PER_COL), corners, ret)
+        cv.imshow(f"Annotated corners {i}", img)
+        cv.waitKey(500)
+        cv.destroyAllWindows()
+
+        imageCoords.append(corners.reshape(-1, 2))
+        worldCoords.append(worldCoordsSingle)
+
+    startTime = time.time()
+    K, Rs, Ts, distCoeffs = manualSingleCameraCacibration(images, worldCoords, imageCoords, CompareWithOpenCV=True)
+    endTime = time.time()
+    print(f"Manual calibration took {endTime - startTime:.3f} seconds.")
+
+    startTime = time.time()
+    opencvK, opencvRs, opencvTs, opencvDistCoeffs = opencvSingleCameraCalibration(images, worldCoords, imageCoords)
+    endTime = time.time()
+    print(f"OpenCV calibration took {endTime - startTime:.3f} seconds.")
+    print(f"Opencv {opencvDistCoeffs}")
+
+    print(f"Reprojection error of manual calibration: \n {reprojectionError2(worldCoords, imageCoords, K, [cv.Rodrigues(R)[0] for R in Rs], Ts, distCoeffs)}")
+    
+    print(f"Reprojection error of opencv calibration: \n {reprojectionError2(worldCoords, imageCoords, opencvK, opencvRs, opencvTs, opencvDistCoeffs)}")
+    
+def calibrateSingleCamera(images, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
+
+    worldCoordsSingle = np.zeros((nCornersPerRow*nCornersPerColumn, 3), np.float32)
+    worldCoordsSingle[:, :2] = np.mgrid[0:nCornersPerRow, 0:nCornersPerColumn].T.reshape(-1, 2)
+    imageCoords = [] 
+    worldCoords = []
+
+    for i, img in enumerate(images):
+        # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        ret, corners = cv.findChessboardCorners(img, (nCornersPerRow, nCornersPerColumn))
+        if not ret:
+            print(f"No chessboard corners found in image {i}")
+            cv.imshow(f"No corners {i}", img)
+            cv.waitKey(1000)
+            cv.destroyAllWindows()
+            continue
+        
+        if refineCorners:
+            corners = cv.cornerSubPix(cv.cvtColor(img, cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            # corners = cv.cornerSubPix(img, corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            
+        cv.drawChessboardCorners(img, (nCornersPerRow, nCornersPerColumn), corners, ret)
+        cv.imshow(f"Annotated corners {i}", img)
+        cv.waitKey(500)
+        cv.destroyAllWindows()
+
+        imageCoords.append(corners.reshape(-1, 2))
+        worldCoords.append(worldCoordsSingle)
+
+    opencvK, opencvRs, opencvTs, opencvDistCoeffs = opencvSingleCameraCalibration(images, worldCoords, imageCoords)
+
+    return opencvK, opencvRs, opencvTs, opencvDistCoeffs
 
 if __name__ == "__main__":
+
+    images = loadCalibrationImages("left")
+    showImagesInGrid(images)
+
     calibrateSingleCamera()
 
     leftImages, rightImages = loadCalibrationImages("all")
