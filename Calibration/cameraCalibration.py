@@ -296,7 +296,7 @@ def calibrateSingleCamera(images):
     
     print(f"Reprojection error of opencv calibration: \n {reprojectionError2(worldCoords, imageCoords, opencvK, opencvRs, opencvTs, opencvDistCoeffs)}")
     
-def calibrateSingleCamera(images, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
+def singleCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
 
     worldCoordsSingle = np.zeros((nCornersPerRow*nCornersPerColumn, 3), np.float32)
     worldCoordsSingle[:, :2] = np.mgrid[0:nCornersPerRow, 0:nCornersPerColumn].T.reshape(-1, 2)
@@ -334,7 +334,7 @@ if __name__ == "__main__":
     images = loadCalibrationImages("left")
     showImagesInGrid(images)
 
-    calibrateSingleCamera()
+    calibrateSingleCamera(images)
 
     leftImages, rightImages = loadCalibrationImages("all")
     print(f"Loaded {len(leftImages)} left images and {len(rightImages)} right images for calibration.")
