@@ -1,5 +1,4 @@
 import cv2 as cv
-import os
 import numpy as np
 from cameraCalibration import singleCameraCalibration, loadCalibrationImages
 

@@ -115,7 +115,7 @@ def manualSingleCameraCacibration(images, worldCoords, imageCoords, CompareWithO
     b = Vh[-1]
 
     v0 = (b[1]*b[3] - b[0]*b[4]) / (b[0]*b[2] - b[1]**2)
-    l = b[5] - ((b[3]**2 + v0*(b[1]*b[3] - b[0]*b[4])) / b[0])
+    l = b[5] - ((b[3]**2 + v0*(b[1]*b[3] - b[0]*b[4])) / b[0])  # noqa: E741
     alpha = np.sqrt(l / b[0])
     beta = np.sqrt(l*b[0] / (b[0]*b[2] - b[1]**2))
     c = -b[1]* alpha**2 * beta / l
@@ -189,7 +189,8 @@ def reprojectionError(world_pts, image_pts, K, R, t):
         X_h = X.reshape(3,1)
         x_cam = R @ X_h + t.reshape(3,1)
         x = K @ x_cam
-        u = x[0]/x[2]; v = x[1]/x[2]
+        u = x[0]/x[2]
+        v = x[1]/x[2]
         projected.append([u.item(), v.item()])
     projected = np.array(projected)
     err = np.linalg.norm(projected - image_pts, axis=1)
