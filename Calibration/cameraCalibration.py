@@ -6,9 +6,14 @@ import time
 
 CALIBRATION_IMAGES_FOLDER_NAME = "calibrationImages"
 
-def loadCalibrationImages(group="all"):
-
-    calibrationImagesPath = os.path.join(os.path.dirname(os.path.realpath(__file__)), CALIBRATION_IMAGES_FOLDER_NAME)
+def loadCalibrationImages(group="all", folderName=None):
+    """
+    This function is used by external code in order to load the images of the calibration pattern. 
+    The images must be inside a folder at the same level as the script. We give as input the name of the folder.
+    Otherwise it will take the default name "calibrationImages".
+    """
+    calibrationImagesFolderName = folderName if folderName else CALIBRATION_IMAGES_FOLDER_NAME
+    calibrationImagesPath = os.path.join(os.path.dirname(os.path.realpath(__file__)), calibrationImagesFolderName)
 
     if group == "left" or group == "right":
         images = []
@@ -33,6 +38,52 @@ def loadCalibrationImages(group="all"):
                 imgPath = os.path.join(calibrationImagesPath, imgFile)
                 rightImages.append(cv.imread(imgPath))
         return leftImages, rightImages
+
+def captureCalibrationImagesFromSingleCamera():
+    """
+    This function is used to capture images of the calibration pattern using a connected camera. Take pictures using the SPACE key.
+    """
+    
+    cap = cv.VideoCapture(0)
+    if not cap.isOpened():
+        print("Cannot open camera")
+        exit()
+    
+    images = []
+    
+    while True:
+        # Capture frame-by-frame
+        ret, frame = cap.read()
+    
+        # if frame is read correctly ret is True
+        if not ret:
+            print("Can't receive frame (stream end?). Exiting ...")
+            break
+        
+        # Our operations on the frame come here
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        gray = frame
+        # Display the resulting frame
+        cv.imshow(f'Capture image {len(images)}', gray)
+        
+        key = cv.waitKey(1) & 0xFF
+
+        if key == ord('q'):  # q to quit
+            print("Quitting capture.")
+            break
+
+        elif key == 32:  # SPACE key (ASCII 32)
+            images.append(gray)
+            cv.destroyAllWindows()
+            
+ 
+    # When everything done, release the capture
+    cap.release()
+    cv.destroyAllWindows()
+    
+    print(f"Images captured {len(images)}")
+    
+    return images
 
 def showImagesInGrid(images):
 
@@ -295,8 +346,12 @@ def calibrateSingleCamera(images):
     print(f"Reprojection error of manual calibration: \n {reprojectionError2(worldCoords, imageCoords, K, [cv.Rodrigues(R)[0] for R in Rs], Ts, distCoeffs)}")
     
     print(f"Reprojection error of opencv calibration: \n {reprojectionError2(worldCoords, imageCoords, opencvK, opencvRs, opencvTs, opencvDistCoeffs)}")
-    
+
+
 def singleCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
+    """
+    This function is used by external code in order to calibrate a single camera using as input the images of the calibration pattern.
+    """
 
     worldCoordsSingle = np.zeros((nCornersPerRow*nCornersPerColumn, 3), np.float32)
     worldCoordsSingle[:, :2] = np.mgrid[0:nCornersPerRow, 0:nCornersPerColumn].T.reshape(-1, 2)
@@ -332,6 +387,7 @@ def singleCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refin
 if __name__ == "__main__":
 
     images = loadCalibrationImages("left")
+    # images =  captureCalibrationImagesFromSingleCamera()
     showImagesInGrid(images)
 
     calibrateSingleCamera(images)
