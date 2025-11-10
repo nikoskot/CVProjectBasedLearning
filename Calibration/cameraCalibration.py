@@ -200,7 +200,8 @@ def manualSingleCameraCacibration(images, worldCoords, imageCoords, CompareWithO
     opencvK, opencvRs, opencvTs = None, None, None
     print(f"K matrix (manual): \n {K}")
     if CompareWithOpenCV:
-        _, opencvK, opencvDist, opencvRs, opencvTs = cv.calibrateCamera(worldCoords, imageCoords, images[0].shape[0:2], None, None)
+        h, w, _ = images[0].shape
+        _, opencvK, opencvDist, opencvRs, opencvTs = cv.calibrateCamera(worldCoords, imageCoords, (w, h), None, None)
         print(f"K matrix (opencv): \n {opencvK}")
         for i in range(len(Rs)):
             print(f"Rotation Matrix (manual) of {i}: \n {Rs[i]}")
@@ -226,8 +227,9 @@ def manualSingleCameraCacibration(images, worldCoords, imageCoords, CompareWithO
     return K, Rs, ts, distortionCoeffs
 
 def opencvSingleCameraCalibration(images, worldCoords, imageCoords):
- 
-    _, opencvK, opencvDist, opencvRs, opencvTs = cv.calibrateCamera(worldCoords, imageCoords, images[0].shape[:-1], None, None)
+    
+    h, w, _ = images[0].shape
+    _, opencvK, opencvDist, opencvRs, opencvTs = cv.calibrateCamera(worldCoords, imageCoords, (w, h), None, None)
     print(f"K matrix (opencv): \n {opencvK}")
     
     return opencvK, opencvRs, opencvTs, opencvDist
