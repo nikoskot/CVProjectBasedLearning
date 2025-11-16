@@ -1,52 +1,67 @@
+import argparse
 import cv2 as cv
 import os
 import numpy as np
 from scipy.optimize import least_squares
-import time
+import pathlib
+import plotly.graph_objs as pgo
+import plotly.offline as pyo
 
-CALIBRATION_IMAGES_FOLDER_NAME = "calibrationImages"
+CALIBRATION_IMAGES_FOLDER_PATH = "calibrationImages"
 
+def getParser():
+    parser = argparse.ArgumentParser(description="Camera Calibration")
+    parser.add_argument("--imagesFolder", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationImages")
+    parser.add_argument("--imagesGroup", type=str, choices=["left", "right"], default="left")
+    parser.add_argument("--patternRowCorners", type=int, default=9)
+    parser.add_argument("--patternColumnCorners", type=int, default=6)
+    parser.add_argument("--dontRefineCorners", action="store_true")
+    parser.add_argument("--resultsSaveFilePath", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calib.json")
+    return parser
+    
 def loadCalibrationImages(group="all", folderName=None):
     """
     This function is used by external code in order to load the images of the calibration pattern. 
-    The images must be inside a folder at the same level as the script. We give as input the name of the folder.
-    Otherwise it will take the default name "calibrationImages".
     """
-    calibrationImagesFolderName = folderName if folderName else CALIBRATION_IMAGES_FOLDER_NAME
-    calibrationImagesPath = os.path.join(os.path.dirname(os.path.realpath(__file__)), calibrationImagesFolderName)
-
+    if not pathlib.Path.exists(folderName):
+        print(f"The provided folder {folderName} does not exist.")
+        return []
+    
+    imageFiles = os.listdir(folderName)
+    if len(imageFiles) == 0:
+        print(f"The provided folder {folderName} exists but is empty.")
+        return []
+    
     if group == "left" or group == "right":
         images = []
-
-        imageFiles = os.listdir(calibrationImagesPath)
-
         for imgFile in imageFiles:
             if imgFile.startswith(group):
-                imgPath = os.path.join(calibrationImagesPath, imgFile)
+                imgPath = os.path.join(folderName, imgFile)
                 images.append(cv.imread(imgPath))
+                
+        print(f"Loaded {len(images)} {group} images.")
         return images
     
     elif group == "all":
-        imageFiles = os.listdir(calibrationImagesPath)
         leftImages, rightImages = [], []
-
         for imgFile in imageFiles:
             if imgFile.startswith("left"):
-                imgPath = os.path.join(calibrationImagesPath, imgFile)
-                leftImages.append(cv.imread(imgPath))
+                imgPath = os.path.join(folderName, imgFile)
+                leftImages.append(cv.imread(imgPath)) 
+                
             if imgFile.startswith("right"):
-                imgPath = os.path.join(calibrationImagesPath, imgFile)
+                imgPath = os.path.join(folderName, imgFile)
                 rightImages.append(cv.imread(imgPath))
+        print(f"Loaded {len(leftImages)} left and {len(rightImages)} right images.")  
         return leftImages, rightImages
 
 def captureCalibrationImagesFromSingleCamera():
     """
     This function is used to capture images of the calibration pattern using a connected camera. Take pictures using the SPACE key.
     """
-    
     cap = cv.VideoCapture(0)
     if not cap.isOpened():
-        print("Cannot open camera")
+        print("Cannot open camera.")
         exit()
     
     images = []
@@ -76,13 +91,11 @@ def captureCalibrationImagesFromSingleCamera():
             images.append(gray)
             cv.destroyAllWindows()
             
- 
     # When everything done, release the capture
     cap.release()
     cv.destroyAllWindows()
     
-    print(f"Images captured {len(images)}")
-    
+    print(f"Captured {len(images)} images.")
     return images
 
 def showImagesInGrid(images):
@@ -227,44 +240,44 @@ def manualSingleCameraCacibration(images, worldCoords, imageCoords, CompareWithO
     return K, Rs, ts, distortionCoeffs
 
 def opencvSingleCameraCalibration(images, worldCoords, imageCoords):
-    
+    '''
+    Calibrate a monocular camera using the OpenCV implementation.
+    '''
     h, w, _ = images[0].shape
-    reprojectionRMSE, opencvK, opencvDist, opencvRs, opencvTs = cv.calibrateCamera(worldCoords, imageCoords, (w, h), None, None)
-    print(f"K matrix (opencv): \n {opencvK}")
-    print(f"Reprojection RMSE (opencv): \n {reprojectionRMSE}")
+    reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = cv.calibrateCamera(worldCoords, imageCoords, (w, h), None, None)
     
-    return opencvK, opencvRs, opencvTs, opencvDist
+    return reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs 
 
-def reprojectionError(world_pts, image_pts, K, R, t):
-    # world_pts Nx3 (or Nx2 with z=0)
-    pts_h = np.hstack([world_pts, np.zeros((world_pts.shape[0],1))]) if world_pts.shape[1]==2 else world_pts
-    projected = []
-    for X in pts_h:
-        X_h = X.reshape(3,1)
-        x_cam = R @ X_h + t.reshape(3,1)
-        x = K @ x_cam
-        u = x[0]/x[2]
-        v = x[1]/x[2]
-        projected.append([u.item(), v.item()])
-    projected = np.array(projected)
-    err = np.linalg.norm(projected - image_pts, axis=1)
-    return err.mean(), err.std()
+# def reprojectionError(world_pts, image_pts, K, R, t):
+#     # world_pts Nx3 (or Nx2 with z=0)
+#     pts_h = np.hstack([world_pts, np.zeros((world_pts.shape[0],1))]) if world_pts.shape[1]==2 else world_pts
+#     projected = []
+#     for X in pts_h:
+#         X_h = X.reshape(3,1)
+#         x_cam = R @ X_h + t.reshape(3,1)
+#         x = K @ x_cam
+#         u = x[0]/x[2]
+#         v = x[1]/x[2]
+#         projected.append([u.item(), v.item()])
+#     projected = np.array(projected)
+#     err = np.linalg.norm(projected - image_pts, axis=1)
+#     return err.mean(), err.std()
 
-def reprojectionError2(worldCoords, imageCoords, K, Rs, Ts, distCoeffs=np.array([])):
-    mean_error = 0
-    for i in range(len(worldCoords)):
-        imgpoints2, _ = cv.projectPoints(worldCoords[i], Rs[i], Ts[i], K, distCoeffs)
-        error = cv.norm(imageCoords[i], imgpoints2.squeeze(), cv.NORM_L2)/len(imgpoints2)
-        mean_error += error
+# def reprojectionError2(worldCoords, imageCoords, K, Rs, Ts, distCoeffs=np.array([])):
+#     mean_error = 0
+#     for i in range(len(worldCoords)):
+#         imgpoints2, _ = cv.projectPoints(worldCoords[i], Rs[i], Ts[i], K, distCoeffs)
+#         error = cv.norm(imageCoords[i], imgpoints2.squeeze(), cv.NORM_L2)/len(imgpoints2)
+#         mean_error += error
     
-    return mean_error/len(worldCoords)
+#     return mean_error/len(worldCoords)
 
-def calculateMonocularReprojectionRMSE(worldCoords, imageCoords, K, Rs, Ts, distCoeffs=np.array([])):
+def calculateMonocularReprojectionRMSE(worldCoords, imageCoords, cameraMatrix, rotationVecs, translationVecs, distortionCoeffs=np.array([])):
     totalError = 0
     totalPoints = 0
 
-    for wrld, img, r, t in zip(worldCoords, imageCoords, Rs, Ts):
-        projected, _ = cv.projectPoints(wrld, r, t, K, distCoeffs)
+    for wrld, img, r, t in zip(worldCoords, imageCoords, rotationVecs, translationVecs):
+        projected, _ = cv.projectPoints(wrld, r, t, cameraMatrix, distortionCoeffs)
         projected = projected.reshape(-1, 2)
 
         err = np.linalg.norm(img - projected, axis=1)
@@ -274,20 +287,39 @@ def calculateMonocularReprojectionRMSE(worldCoords, imageCoords, K, Rs, Ts, dist
     rmse = np.sqrt(totalError / totalPoints)
     return rmse
 
-def calculateReprojectionErrorScatterPlot(worldCoords, imageCoords, K, Rs, Ts, distCoeffs=np.array([])):
+def calculateReprojectionErrorScatterPlot(worldCoords, imageCoords, cameraMatrix, rotationVecs, translationVecs, distortionCoeffs=np.array([])):
     errorsX = []
     errorsY = []
-
-    for wrld, img, r, t in zip(worldCoords, imageCoords, Rs, Ts):
-        projected, _ = cv.projectPoints(wrld, r, t, K, distCoeffs)
+    imgIds = []
+    ptsIds = []
+    
+    for id, (wrld, img, r, t) in enumerate(zip(worldCoords, imageCoords, rotationVecs, translationVecs)):
+        projected, _ = cv.projectPoints(wrld, r, t, cameraMatrix, distortionCoeffs)
         projected = projected.reshape(-1, 2)
 
-        errorsX.append(img.reshape(-1, 2)[:, 0] - projected[:, 0])
-        errorsY.append(img.reshape(-1, 2)[:, 1] - projected[:, 1])
+        errorsX.extend(img.reshape(-1, 2)[:, 0] - projected[:, 0])
+        errorsY.extend(img.reshape(-1, 2)[:, 1] - projected[:, 1])
+        imgIds.extend([id] * len(img))
+        ptsIds.extend(list(range(len(img))))
     
-    errorsX = np.array(errorsX)
-    errorsY = np.array(errorsY)
-    # TODO: Implement plotting using matplotlib
+    scatter  = pgo.Scatter(x=errorsX,
+                           y=errorsY,
+                           mode='markers',
+                           marker=dict(size=10, color='royalblue'),
+                           text = imgIds,
+                           hoverinfo='text'
+                           )
+    layout = pgo.Layout(
+        title='XY Reprojection Error',
+        xaxis=dict(
+            title='Error X',
+            scaleanchor='y',  # Fix aspect ratio 1:1 by linking x axis scale to y axis scale
+            scaleratio=1
+            ),
+        yaxis=dict(title='Error Y')
+        )
+    fig = pgo.Figure(data=[scatter], layout=layout)
+    pyo.plot(fig)
 
 def distortionCalculationReprojectionError(dist_coeffs, worldCoords, imageCoords, K, Rs, Ts):
     errors = []
@@ -334,59 +366,54 @@ def distortionCalculationReprojectionError2(dist_coeffs, worldCoords, imageCoord
             errors.append(np.linalg.norm(obs - pred))
     return np.array(errors)
 
-N_CORNERS_PER_ROW = 9
-N_CORNERS_PER_COL = 6
-REFINE_CORNERS_FLAG = True
-def calibrateSingleCamera(images):
+# def calibrateSingleCamera(images):
 
-    worldCoordsSingle = np.zeros((N_CORNERS_PER_ROW*N_CORNERS_PER_COL, 3), np.float32)
-    worldCoordsSingle[:, :2] = np.mgrid[0:N_CORNERS_PER_ROW, 0:N_CORNERS_PER_COL].T.reshape(-1, 2)
-    imageCoords = [] 
-    worldCoords = []
+#     worldCoordsSingle = np.zeros((N_CORNERS_PER_ROW*N_CORNERS_PER_COL, 3), np.float32)
+#     worldCoordsSingle[:, :2] = np.mgrid[0:N_CORNERS_PER_ROW, 0:N_CORNERS_PER_COL].T.reshape(-1, 2)
+#     imageCoords = [] 
+#     worldCoords = []
 
-    for i, img in enumerate(images):
-        # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-        ret, corners = cv.findChessboardCorners(img, (N_CORNERS_PER_ROW, N_CORNERS_PER_COL))
-        if not ret:
-            print(f"No chessboard corners found in image {i}")
-            cv.imshow(f"No corners {i}", img)
-            cv.waitKey(1000)
-            cv.destroyAllWindows()
-            continue
+#     for i, img in enumerate(images):
+#         # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+#         ret, corners = cv.findChessboardCorners(img, (N_CORNERS_PER_ROW, N_CORNERS_PER_COL))
+#         if not ret:
+#             print(f"No chessboard corners found in image {i}")
+#             cv.imshow(f"No corners {i}", img)
+#             cv.waitKey(1000)
+#             cv.destroyAllWindows()
+#             continue
         
-        if REFINE_CORNERS_FLAG:
-            corners = cv.cornerSubPix(cv.cvtColor(img, cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-            # corners = cv.cornerSubPix(img, corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+#         if REFINE_CORNERS_FLAG:
+#             corners = cv.cornerSubPix(cv.cvtColor(img, cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+#             # corners = cv.cornerSubPix(img, corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
             
-        cv.drawChessboardCorners(img, (N_CORNERS_PER_ROW, N_CORNERS_PER_COL), corners, ret)
-        cv.imshow(f"Annotated corners {i}", img)
-        cv.waitKey(500)
-        cv.destroyAllWindows()
+#         cv.drawChessboardCorners(img, (N_CORNERS_PER_ROW, N_CORNERS_PER_COL), corners, ret)
+#         cv.imshow(f"Annotated corners {i}", img)
+#         cv.waitKey(500)
+#         cv.destroyAllWindows()
 
-        imageCoords.append(corners.reshape(-1, 2))
-        worldCoords.append(worldCoordsSingle)
+#         imageCoords.append(corners.reshape(-1, 2))
+#         worldCoords.append(worldCoordsSingle)
 
-    startTime = time.time()
-    K, Rs, Ts, distCoeffs = manualSingleCameraCacibration(images, worldCoords, imageCoords, CompareWithOpenCV=True)
-    endTime = time.time()
-    print(f"Manual calibration took {endTime - startTime:.3f} seconds.")
+#     startTime = time.time()
+#     K, Rs, Ts, distCoeffs = manualSingleCameraCacibration(images, worldCoords, imageCoords, CompareWithOpenCV=True)
+#     endTime = time.time()
+#     print(f"Manual calibration took {endTime - startTime:.3f} seconds.")
 
-    startTime = time.time()
-    opencvK, opencvRs, opencvTs, opencvDistCoeffs = opencvSingleCameraCalibration(images, worldCoords, imageCoords)
-    endTime = time.time()
-    print(f"OpenCV calibration took {endTime - startTime:.3f} seconds.")
-    print(f"Opencv {opencvDistCoeffs}")
+#     startTime = time.time()
+#     opencvRMSE, opencvK, opencvDistCoeffs, opencvRs, opencvTs = opencvSingleCameraCalibration(images, worldCoords, imageCoords)
+#     endTime = time.time()
+#     print(f"OpenCV calibration took {endTime - startTime:.3f} seconds.")
+#     print(f"Opencv {opencvDistCoeffs}")
 
-    print(f"Reprojection error of manual calibration: \n {calculateMonocularReprojectionRMSE(worldCoords, imageCoords, K, [cv.Rodrigues(R)[0] for R in Rs], Ts, distCoeffs)}")
+#     print(f"Reprojection error of manual calibration: \n {calculateMonocularReprojectionRMSE(worldCoords, imageCoords, K, [cv.Rodrigues(R)[0] for R in Rs], Ts, distCoeffs)}")
     
-    print(f"Reprojection error of opencv calibration: \n {calculateMonocularReprojectionRMSE(worldCoords, imageCoords, opencvK, opencvRs, opencvTs, opencvDistCoeffs)}")
+#     print(f"Reprojection error of opencv calibration: \n {calculateMonocularReprojectionRMSE(worldCoords, imageCoords, opencvK, opencvRs, opencvTs, opencvDistCoeffs)}")
 
-
-def singleCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
+def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
     """
     This function is used by external code in order to calibrate a single camera using as input the images of the calibration pattern.
     """
-
     worldCoordsSingle = np.zeros((nCornersPerRow*nCornersPerColumn, 3), np.float32)
     worldCoordsSingle[:, :2] = np.mgrid[0:nCornersPerRow, 0:nCornersPerColumn].T.reshape(-1, 2)
     imageCoords = [] 
@@ -404,7 +431,6 @@ def singleCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refin
         
         if refineCorners:
             corners = cv.cornerSubPix(cv.cvtColor(img, cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-            # corners = cv.cornerSubPix(img, corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
             
         cv.drawChessboardCorners(img, (nCornersPerRow, nCornersPerColumn), corners, ret)
         cv.imshow(f"Annotated corners {i}", img)
@@ -414,30 +440,64 @@ def singleCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refin
         imageCoords.append(corners.reshape(-1, 2))
         worldCoords.append(worldCoordsSingle)
 
-    opencvK, opencvRs, opencvTs, opencvDistCoeffs = opencvSingleCameraCalibration(images, worldCoords, imageCoords)
+    reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = opencvSingleCameraCalibration(images, worldCoords, imageCoords)
 
-    return opencvK, opencvRs, opencvTs, opencvDistCoeffs
+    print(f"Monocular calibration RMSE (pixels): \n{reprojectionRMSE}")
+    print(f"Camera matrix: \n{cameraMatrix}")
+    print(f"Camera distortion coefficients: \n{distortionCoeffs}")
+    print(f"Rotation vectors: \n{rotationVecs}")
+    print(f"Translation vectors: \n{translationVecs}")
+    
+    calculateReprojectionErrorScatterPlot(worldCoords, imageCoords, cameraMatrix, rotationVecs, translationVecs, distortionCoeffs)
+    
+    return reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs
 
-if __name__ == "__main__":
+def saveCalibrationResults(path, rmse, cameraMatrix, distortionCoeffs):
+    try:
+        fs = cv.FileStorage(path, cv.FILE_STORAGE_WRITE)
+        fs.write("cameraMatrix", cameraMatrix)
+        fs.write("distortionCoeffs", distortionCoeffs)
+        fs.write("rmse", rmse)
+        fs.release()
+    except Exception as e:
+        print(f"Could not save calibration results in file {path}. \n Exception {e}")
 
-    images = loadCalibrationImages("left")
-    # images =  captureCalibrationImagesFromSingleCamera()
+def loadCalibrationResults(path):
+    try:
+        fs = cv.FileStorage(path, cv.FILE_STORAGE_READ)
+        cameraMatrix = fs.getNode("cameraMatrix").mat()
+        distortionCoeffs = fs.getNode("distortionCoeffs").mat()
+        rmse = fs.getNode("rmse").real()
+        fs.release()
+        return rmse, cameraMatrix, distortionCoeffs
+    except Exception as e:
+        print(f"Could not load calibration results from file {path}. \n Exception {e}")
+
+def main():
+    parser = getParser()
+    args = parser.parse_args()
+    print(f"Starting monocular camera calibration with: \n {vars(args)}")
+    
+    images = loadCalibrationImages(group=args.imagesGroup, folderName=args.imagesFolder)
+    if len(images) == 0:
+        print("Could not load images from the provided folder. Will capture images from the available camera.")
+        images = captureCalibrationImagesFromSingleCamera()
+        if len(images) == 0:
+            print("No images to use. Quitting.")
+            return
+    
     showImagesInGrid(images)
 
-    calibrateSingleCamera(images)
+    reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = monocularCameraCalibration(images=images, nCornersPerRow=args.patternRowCorners, nCornersPerColumn=args.patternColumnCorners, refineCorners=(not args.dontRefineCorners))
+    
+    print(f"Saving calibration results to file {args.resultsSaveFilePath}")
+    saveCalibrationResults(args.resultsSaveFilePath, reprojectionRMSE, cameraMatrix, distortionCoeffs)
+    
+    print(f"Loading calibration results from file {args.resultsSaveFilePath}")
+    reprojectionRMSE, cameraMatrix, distortionCoeffs = loadCalibrationResults(args.resultsSaveFilePath)
+    print(f"Loaded monocular calibration RMSE: \n{reprojectionRMSE}")
+    print(f"Loaded camera matrix: \n{cameraMatrix}")
+    print(f"Loaded camera distortion coefficients: \n{distortionCoeffs}")
 
-    leftImages, rightImages = loadCalibrationImages("all")
-    print(f"Loaded {len(leftImages)} left images and {len(rightImages)} right images for calibration.")
-    # for l, r in zip(leftImages, rightImages):
-    #     cv.imshow("left", l)
-    #     cv.imshow("right", r)
-    #     cv.waitKey(0)
-
-    leftImages, rightImages = [], []
-    leftImages = loadCalibrationImages("left")
-    rightImages = loadCalibrationImages("right")
-    print(f"Loaded {len(leftImages)} left images and {len(rightImages)} right images for calibration.")
-    # for l, r in zip(leftImages, rightImages):
-    #     cv.imshow("left", l)
-    #     cv.imshow("right", r)
-    #     cv.waitKey(0)
+if __name__ == "__main__":
+    main()

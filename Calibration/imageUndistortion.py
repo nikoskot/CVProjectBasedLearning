@@ -1,6 +1,6 @@
 import cv2 as cv
 import numpy as np
-from cameraCalibration import singleCameraCalibration, loadCalibrationImages
+from cameraCalibration import monocularCameraCalibration, loadCalibrationImages
 
 def undistrortImages(images, K, distortionCoeffs):
     fx, fy = K[0,0], K[1,1]
@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
     images = loadCalibrationImages("left")
 
-    K, Rs, Ts, distortionCoeffs = singleCameraCalibration(images, 9, 6, True)
+    K, Rs, Ts, distortionCoeffs = monocularCameraCalibration(images, 9, 6, True)
 
     print(f"Camera Matrix: \n{K}")
     print(f"Distortion coefficients: \n{distortionCoeffs}")
