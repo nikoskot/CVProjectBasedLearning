@@ -229,8 +229,9 @@ def manualSingleCameraCacibration(images, worldCoords, imageCoords, CompareWithO
 def opencvSingleCameraCalibration(images, worldCoords, imageCoords):
     
     h, w, _ = images[0].shape
-    _, opencvK, opencvDist, opencvRs, opencvTs = cv.calibrateCamera(worldCoords, imageCoords, (w, h), None, None)
+    reprojectionRMSE, opencvK, opencvDist, opencvRs, opencvTs = cv.calibrateCamera(worldCoords, imageCoords, (w, h), None, None)
     print(f"K matrix (opencv): \n {opencvK}")
+    print(f"Reprojection RMSE (opencv): \n {reprojectionRMSE}")
     
     return opencvK, opencvRs, opencvTs, opencvDist
 
@@ -257,6 +258,36 @@ def reprojectionError2(worldCoords, imageCoords, K, Rs, Ts, distCoeffs=np.array(
         mean_error += error
     
     return mean_error/len(worldCoords)
+
+def calculateMonocularReprojectionRMSE(worldCoords, imageCoords, K, Rs, Ts, distCoeffs=np.array([])):
+    totalError = 0
+    totalPoints = 0
+
+    for wrld, img, r, t in zip(worldCoords, imageCoords, Rs, Ts):
+        projected, _ = cv.projectPoints(wrld, r, t, K, distCoeffs)
+        projected = projected.reshape(-1, 2)
+
+        err = np.linalg.norm(img - projected, axis=1)
+        totalError += np.sum(err**2)
+        totalPoints += len(wrld)
+    
+    rmse = np.sqrt(totalError / totalPoints)
+    return rmse
+
+def calculateReprojectionErrorScatterPlot(worldCoords, imageCoords, K, Rs, Ts, distCoeffs=np.array([])):
+    errorsX = []
+    errorsY = []
+
+    for wrld, img, r, t in zip(worldCoords, imageCoords, Rs, Ts):
+        projected, _ = cv.projectPoints(wrld, r, t, K, distCoeffs)
+        projected = projected.reshape(-1, 2)
+
+        errorsX.append(img.reshape(-1, 2)[:, 0] - projected[:, 0])
+        errorsY.append(img.reshape(-1, 2)[:, 1] - projected[:, 1])
+    
+    errorsX = np.array(errorsX)
+    errorsY = np.array(errorsY)
+    # TODO: Implement plotting using matplotlib
 
 def distortionCalculationReprojectionError(dist_coeffs, worldCoords, imageCoords, K, Rs, Ts):
     errors = []
@@ -346,9 +377,9 @@ def calibrateSingleCamera(images):
     print(f"OpenCV calibration took {endTime - startTime:.3f} seconds.")
     print(f"Opencv {opencvDistCoeffs}")
 
-    print(f"Reprojection error of manual calibration: \n {reprojectionError2(worldCoords, imageCoords, K, [cv.Rodrigues(R)[0] for R in Rs], Ts, distCoeffs)}")
+    print(f"Reprojection error of manual calibration: \n {calculateMonocularReprojectionRMSE(worldCoords, imageCoords, K, [cv.Rodrigues(R)[0] for R in Rs], Ts, distCoeffs)}")
     
-    print(f"Reprojection error of opencv calibration: \n {reprojectionError2(worldCoords, imageCoords, opencvK, opencvRs, opencvTs, opencvDistCoeffs)}")
+    print(f"Reprojection error of opencv calibration: \n {calculateMonocularReprojectionRMSE(worldCoords, imageCoords, opencvK, opencvRs, opencvTs, opencvDistCoeffs)}")
 
 
 def singleCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
