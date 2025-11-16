@@ -12,6 +12,7 @@ CALIBRATION_IMAGES_FOLDER_PATH = "calibrationImages"
 def getParser():
     parser = argparse.ArgumentParser(description="Camera Calibration")
     parser.add_argument("--imagesFolder", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationImages")
+    parser.add_argument("--liveCapture", action="store_true")
     parser.add_argument("--imagesGroup", type=str, choices=["left", "right"], default="left")
     parser.add_argument("--patternRowCorners", type=int, default=9)
     parser.add_argument("--patternColumnCorners", type=int, default=6)
@@ -57,7 +58,7 @@ def loadCalibrationImages(group="all", folderName=None):
 
 def captureCalibrationImagesFromSingleCamera():
     """
-    This function is used to capture images of the calibration pattern using a connected camera. Take pictures using the SPACE key.
+    This function is used to capture images of the calibration pattern using a connected camera. Start taking pictures using the SPACE key. Stop with q.
     """
     cap = cv.VideoCapture(0)
     if not cap.isOpened():
@@ -65,7 +66,8 @@ def captureCalibrationImagesFromSingleCamera():
         exit()
     
     images = []
-    
+    capturing = False
+    info = "Waiting to start capturing images."
     while True:
         # Capture frame-by-frame
         ret, frame = cap.read()
@@ -79,18 +81,25 @@ def captureCalibrationImagesFromSingleCamera():
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
         gray = frame
         # Display the resulting frame
-        cv.imshow(f'Capture image {len(images)}', gray)
+        cv.imshow(info, gray)
         
-        key = cv.waitKey(1) & 0xFF
+        key = cv.waitKey(100) & 0xFF
 
         if key == ord('q'):  # q to quit
             print("Quitting capture.")
             break
 
         elif key == 32:  # SPACE key (ASCII 32)
-            images.append(gray)
+            capturing = True
             cv.destroyAllWindows()
-            
+            info = "Capturing images..."
+            continue
+        
+        if capturing:
+            images.append(gray)
+            # cv.destroyAllWindows()
+            # cv.waitKey(100)
+        
     # When everything done, release the capture
     cap.release()
     cv.destroyAllWindows()
@@ -431,11 +440,12 @@ def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, re
         
         if refineCorners:
             corners = cv.cornerSubPix(cv.cvtColor(img, cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-            
-        cv.drawChessboardCorners(img, (nCornersPerRow, nCornersPerColumn), corners, ret)
-        cv.imshow(f"Annotated corners {i}", img)
-        cv.waitKey(500)
-        cv.destroyAllWindows()
+        
+        # TODO: Save the annotated images instead of showing
+        # cv.drawChessboardCorners(img, (nCornersPerRow, nCornersPerColumn), corners, ret)
+        # cv.imshow(f"Annotated corners {i}", img)
+        # cv.waitKey(500)
+        # cv.destroyAllWindows()
 
         imageCoords.append(corners.reshape(-1, 2))
         worldCoords.append(worldCoordsSingle)
@@ -478,15 +488,18 @@ def main():
     args = parser.parse_args()
     print(f"Starting monocular camera calibration with: \n {vars(args)}")
     
-    images = loadCalibrationImages(group=args.imagesGroup, folderName=args.imagesFolder)
-    if len(images) == 0:
-        print("Could not load images from the provided folder. Will capture images from the available camera.")
+    images = []
+    if args.liveCapture:
+        print("Capturing images from camera.")
         images = captureCalibrationImagesFromSingleCamera()
-        if len(images) == 0:
-            print("No images to use. Quitting.")
-            return
-    
-    showImagesInGrid(images)
+    else:
+        print(f"Loading images from folder {args.imagesFolder}.")
+        images = loadCalibrationImages(group=args.imagesGroup, folderName=args.imagesFolder)
+    if len(images) == 0:
+        print("No images to use. Quitting.")
+        return
+
+    # showImagesInGrid(images)
 
     reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = monocularCameraCalibration(images=images, nCornersPerRow=args.patternRowCorners, nCornersPerColumn=args.patternColumnCorners, refineCorners=(not args.dontRefineCorners))
     
