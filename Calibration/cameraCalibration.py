@@ -6,8 +6,7 @@ from scipy.optimize import least_squares
 import pathlib
 import plotly.graph_objs as pgo
 import plotly.offline as pyo
-
-CALIBRATION_IMAGES_FOLDER_PATH = "calibrationImages"
+import tqdm
 
 def getParser():
     parser = argparse.ArgumentParser(description="Camera Calibration")
@@ -17,7 +16,7 @@ def getParser():
     parser.add_argument("--patternRowCorners", type=int, default=9)
     parser.add_argument("--patternColumnCorners", type=int, default=6)
     parser.add_argument("--dontRefineCorners", action="store_true")
-    parser.add_argument("--resultsSaveFilePath", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calib.json")
+    parser.add_argument("--resultsSavePath", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationResults")
     return parser
     
 def loadCalibrationImages(group="all", folderName=None):
@@ -126,7 +125,6 @@ def showImagesInGrid(images):
     grid = np.vstack(grid_rows)
 
     cv.namedWindow("Grid", cv.WINDOW_NORMAL)
-    # cv.resizeWindow("Grid", 1920, 1080)
     cv.imshow("Grid", grid)
     cv.waitKey(0)
     cv.destroyAllWindows()
@@ -419,7 +417,7 @@ def distortionCalculationReprojectionError2(dist_coeffs, worldCoords, imageCoord
     
 #     print(f"Reprojection error of opencv calibration: \n {calculateMonocularReprojectionRMSE(worldCoords, imageCoords, opencvK, opencvRs, opencvTs, opencvDistCoeffs)}")
 
-def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
+def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True, savePath=None):
     """
     This function is used by external code in order to calibrate a single camera using as input the images of the calibration pattern.
     """
@@ -428,7 +426,7 @@ def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, re
     imageCoords = [] 
     worldCoords = []
 
-    for i, img in enumerate(images):
+    for i, img in tqdm.tqdm(enumerate(images)):
         # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
         ret, corners = cv.findChessboardCorners(img, (nCornersPerRow, nCornersPerColumn))
         if not ret:
@@ -441,11 +439,10 @@ def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, re
         if refineCorners:
             corners = cv.cornerSubPix(cv.cvtColor(img, cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
         
-        # TODO: Save the annotated images instead of showing
-        # cv.drawChessboardCorners(img, (nCornersPerRow, nCornersPerColumn), corners, ret)
-        # cv.imshow(f"Annotated corners {i}", img)
-        # cv.waitKey(500)
-        # cv.destroyAllWindows()
+        if savePath:
+            imgCopy = img.copy()
+            cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners, ret)
+            cv.imwrite(pathlib.Path.joinpath(savePath, f"annotated{i}.png"), imgCopy)
 
         imageCoords.append(corners.reshape(-1, 2))
         worldCoords.append(worldCoordsSingle)
@@ -462,30 +459,36 @@ def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, re
     
     return reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs
 
-def saveCalibrationResults(path, rmse, cameraMatrix, distortionCoeffs):
+def saveCalibrationResults(folderPath, rmse, cameraMatrix, distortionCoeffs):
     try:
-        fs = cv.FileStorage(path, cv.FILE_STORAGE_WRITE)
+        fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "calib.json"), cv.FILE_STORAGE_WRITE)
         fs.write("cameraMatrix", cameraMatrix)
         fs.write("distortionCoeffs", distortionCoeffs)
         fs.write("rmse", rmse)
         fs.release()
     except Exception as e:
-        print(f"Could not save calibration results in file {path}. \n Exception {e}")
+        print(f"Could not save calibration results in file {folderPath}\calib.json. \n Exception {e}")
 
-def loadCalibrationResults(path):
+def loadCalibrationResults(folderPath):
     try:
-        fs = cv.FileStorage(path, cv.FILE_STORAGE_READ)
+        fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "calib.json"), cv.FILE_STORAGE_READ)
         cameraMatrix = fs.getNode("cameraMatrix").mat()
         distortionCoeffs = fs.getNode("distortionCoeffs").mat()
         rmse = fs.getNode("rmse").real()
         fs.release()
         return rmse, cameraMatrix, distortionCoeffs
     except Exception as e:
-        print(f"Could not load calibration results from file {path}. \n Exception {e}")
+        print(f"Could not load calibration results from file {folderPath}\calib.json. \n Exception {e}")
 
 def main():
     parser = getParser()
     args = parser.parse_args()
+
+    # Create necessary folders/paths
+    print("Creating path for calibration results.")
+    os.makedirs(args.resultsSavePath, exist_ok=True)
+    os.makedirs(pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages"), exist_ok=True)
+
     print(f"Starting monocular camera calibration with: \n {vars(args)}")
     
     images = []
@@ -501,16 +504,16 @@ def main():
 
     # showImagesInGrid(images)
 
-    reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = monocularCameraCalibration(images=images, nCornersPerRow=args.patternRowCorners, nCornersPerColumn=args.patternColumnCorners, refineCorners=(not args.dontRefineCorners))
+    reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = monocularCameraCalibration(images=images, nCornersPerRow=args.patternRowCorners, nCornersPerColumn=args.patternColumnCorners, refineCorners=(not args.dontRefineCorners), savePath=pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages"))
     
-    print(f"Saving calibration results to file {args.resultsSaveFilePath}")
-    saveCalibrationResults(args.resultsSaveFilePath, reprojectionRMSE, cameraMatrix, distortionCoeffs)
+    print(f"Saving calibration results to folder {args.resultsSavePath}")
+    saveCalibrationResults(args.resultsSavePath, reprojectionRMSE, cameraMatrix, distortionCoeffs)
     
-    print(f"Loading calibration results from file {args.resultsSaveFilePath}")
-    reprojectionRMSE, cameraMatrix, distortionCoeffs = loadCalibrationResults(args.resultsSaveFilePath)
-    print(f"Loaded monocular calibration RMSE: \n{reprojectionRMSE}")
-    print(f"Loaded camera matrix: \n{cameraMatrix}")
-    print(f"Loaded camera distortion coefficients: \n{distortionCoeffs}")
+    # print(f"Loading calibration results from folder {args.resultsSavePath}")
+    # reprojectionRMSE, cameraMatrix, distortionCoeffs = loadCalibrationResults(args.resultsSavePath)
+    # print(f"Loaded monocular calibration RMSE: \n{reprojectionRMSE}")
+    # print(f"Loaded camera matrix: \n{cameraMatrix}")
+    # print(f"Loaded camera distortion coefficients: \n{distortionCoeffs}")
 
 if __name__ == "__main__":
     main()
