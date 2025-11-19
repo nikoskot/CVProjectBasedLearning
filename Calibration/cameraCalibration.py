@@ -7,18 +7,31 @@ import pathlib
 import plotly.graph_objs as pgo
 import plotly.offline as pyo
 import tqdm
+import time
+import configargparse
+import yaml
+from datetime import datetime
 
 def getParser():
-    parser = argparse.ArgumentParser(description="Camera Calibration")
-    parser.add_argument("--imagesFolder", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationImages")
-    parser.add_argument("--liveCapture", action="store_true")
-    parser.add_argument("--imagesGroup", type=str, choices=["left", "right"], default="left")
-    parser.add_argument("--patternRowCorners", type=int, default=9)
-    parser.add_argument("--patternColumnCorners", type=int, default=6)
-    parser.add_argument("--dontRefineCorners", action="store_true")
-    parser.add_argument("--resultsSavePath", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationResults")
+    parser = configargparse.ArgParser(default_config_files=["Calibration\calibrationConfig.yaml"])
+    parser.add("--configFile", is_config_file=True, help='config file path')
+    # parser = argparse.ArgumentParser(description="Camera Calibration")
+    parser.add("--imagesFolder", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationImages")
+    parser.add("--liveCapture", action="store_true")
+    parser.add("--imagesGroup", type=str, choices=["left", "right"], default="left")
+    parser.add("--patternRowCorners", type=int, default=9)
+    parser.add("--patternColumnCorners", type=int, default=6)
+    parser.add("--dontRefineCorners", action="store_true")
+    parser.add("--resultsSavePath", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationResults")
     return parser
-    
+
+def saveArgsToYaml(args, filename):
+    # Convert Namespace to dict
+    args_dict = vars(args)
+    # Dump to YAML file
+    with open(filename, 'w') as f:
+        yaml.dump(args_dict, f, default_flow_style=False)
+        
 def loadCalibrationImages(group="all", folderName=None):
     """
     This function is used by external code in order to load the images of the calibration pattern. 
@@ -55,57 +68,174 @@ def loadCalibrationImages(group="all", folderName=None):
         print(f"Loaded {len(leftImages)} left and {len(rightImages)} right images.")  
         return leftImages, rightImages
 
+# def captureCalibrationImagesFromSingleCamera():
+#     """
+#     This function is used to capture images of the calibration pattern using a connected camera. Start taking pictures using the SPACE key. Stop with q.
+#     """
+#     cap = cv.VideoCapture(0)
+#     if not cap.isOpened():
+#         print("Cannot open camera.")
+#         exit()
+    
+#     images = []
+#     capturing = False
+#     info = "Waiting to start capturing images."
+#     while True:
+#         # Capture frame-by-frame
+#         ret, frame = cap.read()
+    
+#         # if frame is read correctly ret is True
+#         if not ret:
+#             print("Can't receive frame (stream end?). Exiting ...")
+#             break
+        
+#         # Our operations on the frame come here
+#         # gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+#         # gray = frame
+#         # frame = cv.resize(frame, (600, 400))
+#         # Display the resulting frame
+#         cv.imshow(info, frame)
+        
+#         key = cv.waitKey(100) & 0xFF
+
+#         if key == ord('q'):  # q to quit
+#             print("Quitting capture.")
+#             break
+
+#         elif key == 32:  # SPACE key (ASCII 32)
+#             capturing = True
+#             cv.destroyAllWindows()
+#             info = f"Capturing images...Press q to stop"
+#             continue
+        
+#         if capturing:
+#             images.append(frame)
+#             # cv.destroyAllWindows()
+#             # cv.waitKey(100)
+        
+#     # When everything done, release the capture
+#     cap.release()
+#     cv.destroyAllWindows()
+    
+#     print(f"Captured {len(images)} images.")
+#     return images
+
+# def captureCalibrationImagesFromSingleCamera():
+#     """
+#     This function is used to capture images of the calibration pattern using a connected camera. Start taking pictures using the SPACE key. Stop with q.
+#     """
+#     cap = cv.VideoCapture(0)
+#     if not cap.isOpened():
+#         print("Cannot open camera.")
+#         exit()
+    
+#     images = []
+#     capturing = False
+#     info = "Waiting to start capturing images."
+#     while True:
+#         # Capture frame-by-frame
+#         ret, frame = cap.read()
+    
+#         # if frame is read correctly ret is True
+#         if not ret:
+#             print("Can't receive frame (stream end?). Exiting ...")
+#             break
+        
+#         # Our operations on the frame come here
+#         # gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+#         # gray = frame
+#         # frame = cv.resize(frame, (600, 400))
+#         # Display the resulting frame
+#         cv.imshow(info, cv.flip(frame, 1))
+        
+#         key = cv.waitKey(100) & 0xFF
+
+#         if key == ord('q'):  # q to quit
+#             print("Quitting capture.")
+#             break
+
+#         elif key == 32:  # SPACE key (ASCII 32)
+#             images.append(frame)
+#             cv.destroyAllWindows()
+#             info = f"Capturing images...Press q to stop"
+#             continue
+        
+#         # if capturing:
+#         #     images.append(frame)
+#         #     # cv.destroyAllWindows()
+#         #     # cv.waitKey(100)
+        
+#     # When everything done, release the capture
+#     cap.release()
+#     cv.destroyAllWindows()
+    
+#     print(f"Captured {len(images)} images.")
+#     return images
+
 def captureCalibrationImagesFromSingleCamera():
-    """
-    This function is used to capture images of the calibration pattern using a connected camera. Start taking pictures using the SPACE key. Stop with q.
-    """
     cap = cv.VideoCapture(0)
     if not cap.isOpened():
-        print("Cannot open camera.")
-        exit()
-    
+        print("Cannot open camera")
+        return
+
+    cap.set(cv.CAP_PROP_FRAME_WIDTH, 1920)   # width in pixels
+    cap.set(cv.CAP_PROP_FRAME_HEIGHT, 1080)   # height in pixels
+
+    save_interval = 3.0  # seconds between saves
+    saving = False
+    last_save_time = 0
+
+    frame_count = 0  # count saved frames
     images = []
-    capturing = False
     info = "Waiting to start capturing images."
     while True:
-        # Capture frame-by-frame
         ret, frame = cap.read()
-    
-        # if frame is read correctly ret is True
         if not ret:
             print("Can't receive frame (stream end?). Exiting ...")
             break
-        
-        # Our operations on the frame come here
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-        gray = frame
-        # Display the resulting frame
-        cv.imshow(info, gray)
-        
-        key = cv.waitKey(100) & 0xFF
 
-        if key == ord('q'):  # q to quit
-            print("Quitting capture.")
+        current_time = time.time()
+        frameCopy = cv.flip(frame.copy(), 1)
+
+        # If saving mode started, check time and save frames every 2 seconds
+        if saving:
+            elapsed = current_time - last_save_time
+
+            # Calculate countdown (seconds remaining to next save)
+            countdown = max(0, save_interval - elapsed)
+            countdown_text = f"Next capture in: {countdown:.1f}s"
+
+            # Put countdown text on frame
+            cv.putText(frameCopy, countdown_text, (10, 30), cv.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 0, 255), 2, cv.LINE_AA)
+
+            if elapsed >= save_interval:
+                # Save frame
+                images.append(frame)
+                frame_count += 1
+                last_save_time = current_time
+
+        else:
+            # Show instruction
+            cv.putText(frameCopy, f"Press 's' to start saving every {save_interval} seconds", (10, 30),
+                        cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv.LINE_AA)
+
+        cv.imshow(info, frameCopy)
+
+        key = cv.waitKey(1) & 0xFF
+        if key == ord('q'):  # Quit on 'q'
             break
+        elif key == ord('s'):  # Start saving on 's'
+            if not saving:
+                cv.destroyAllWindows()
+                saving = True
+                last_save_time = current_time
+                info = "Capturing images...Press q to stop"
 
-        elif key == 32:  # SPACE key (ASCII 32)
-            capturing = True
-            cv.destroyAllWindows()
-            info = "Capturing images..."
-            continue
-        
-        if capturing:
-            images.append(gray)
-            # cv.destroyAllWindows()
-            # cv.waitKey(100)
-        
-    # When everything done, release the capture
     cap.release()
     cv.destroyAllWindows()
-    
-    print(f"Captured {len(images)} images.")
     return images
-
+    
 def showImagesInGrid(images):
 
     rows = np.sqrt(len(images)).astype(int)
@@ -426,6 +556,7 @@ def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, re
     imageCoords = [] 
     worldCoords = []
 
+    print("Detecting pattern cornenrs.")
     for i, img in tqdm.tqdm(enumerate(images)):
         # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
         ret, corners = cv.findChessboardCorners(img, (nCornersPerRow, nCornersPerColumn))
@@ -447,13 +578,16 @@ def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, re
         imageCoords.append(corners.reshape(-1, 2))
         worldCoords.append(worldCoordsSingle)
 
+    print("Calibrating.")
+    start = time.time()
     reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = opencvSingleCameraCalibration(images, worldCoords, imageCoords)
+    print(f"Camera calibration took {time.time() - start}.")
 
     print(f"Monocular calibration RMSE (pixels): \n{reprojectionRMSE}")
     print(f"Camera matrix: \n{cameraMatrix}")
     print(f"Camera distortion coefficients: \n{distortionCoeffs}")
-    print(f"Rotation vectors: \n{rotationVecs}")
-    print(f"Translation vectors: \n{translationVecs}")
+    # print(f"Rotation vectors: \n{rotationVecs}")
+    # print(f"Translation vectors: \n{translationVecs}")
     
     calculateReprojectionErrorScatterPlot(worldCoords, imageCoords, cameraMatrix, rotationVecs, translationVecs, distortionCoeffs)
     
@@ -485,18 +619,21 @@ def main():
     args = parser.parse_args()
 
     # Create necessary folders/paths
-    print("Creating path for calibration results.")
+    print("---Creating path for calibration results.---")
+    args.resultsSavePath = pathlib.Path.joinpath(args.resultsSavePath, datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(args.resultsSavePath, exist_ok=True)
     os.makedirs(pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages"), exist_ok=True)
+    # Save arguments use to file
+    saveArgsToYaml(args, pathlib.Path.joinpath(args.resultsSavePath, "config.yaml"))
 
-    print(f"Starting monocular camera calibration with: \n {vars(args)}")
+    print(f"---Starting monocular camera calibration with: \n {vars(args)}---")
     
     images = []
     if args.liveCapture:
-        print("Capturing images from camera.")
+        print("---Capturing images from camera.---")
         images = captureCalibrationImagesFromSingleCamera()
     else:
-        print(f"Loading images from folder {args.imagesFolder}.")
+        print(f"---Loading images from folder {args.imagesFolder}.---")
         images = loadCalibrationImages(group=args.imagesGroup, folderName=args.imagesFolder)
     if len(images) == 0:
         print("No images to use. Quitting.")
@@ -506,7 +643,7 @@ def main():
 
     reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = monocularCameraCalibration(images=images, nCornersPerRow=args.patternRowCorners, nCornersPerColumn=args.patternColumnCorners, refineCorners=(not args.dontRefineCorners), savePath=pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages"))
     
-    print(f"Saving calibration results to folder {args.resultsSavePath}")
+    print(f"---Saving calibration results to folder {args.resultsSavePath}---")
     saveCalibrationResults(args.resultsSavePath, reprojectionRMSE, cameraMatrix, distortionCoeffs)
     
     # print(f"Loading calibration results from folder {args.resultsSavePath}")
@@ -514,6 +651,6 @@ def main():
     # print(f"Loaded monocular calibration RMSE: \n{reprojectionRMSE}")
     # print(f"Loaded camera matrix: \n{cameraMatrix}")
     # print(f"Loaded camera distortion coefficients: \n{distortionCoeffs}")
-
+    
 if __name__ == "__main__":
     main()
