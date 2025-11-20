@@ -6,7 +6,37 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from Calibration import stereoCameraCalibration as stereoCalib
 from Calibration import cameraCalibration as monoCalib
+import os
+import pathlib
+import plotly.graph_objs as pgo
+import plotly.offline as pyo
+import tqdm
+import time
+import configargparse
+import yaml
+from datetime import datetime
 
+def getParser():
+    parser = configargparse.ArgParser(default_config_files=["Depth\depthEstimationConfig.yaml"])
+    parser.add("--configFile", is_config_file=True, help='config file path')
+    # parser = argparse.ArgumentParser(description="Camera Calibration")
+    parser.add("--imagesFolder", type=lambda p: pathlib.Path(p).resolve(), default="Depth\depthEstimationImages")
+    parser.add("--liveCapture", action="store_true")
+    parser.add("--imagesGroup", type=str, choices=["all", "left", "right"], default="left")
+    parser.add("--patternRowCorners", type=int, default=9)
+    parser.add("--patternColumnCorners", type=int, default=6)
+    parser.add("--dontRefineCorners", action="store_true")
+    parser.add("--resultsSavePath", type=lambda p: pathlib.Path(p).resolve(), default="Depth\depthEstimationResults")
+    parser.add("--calibrationParamsFile", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationResults")
+    return parser
+
+def saveArgsToYaml(args, filename):
+    # Convert Namespace to dict
+    args_dict = vars(args)
+    # Dump to YAML file
+    with open(filename, 'w') as f:
+        yaml.dump(args_dict, f, default_flow_style=False)
+        
 def draw_epipolar_lines(left, right, step=50):
     left_vis = left.copy()
     right_vis = right.copy()
@@ -48,9 +78,9 @@ def rectifyStereoImages(leftImages, rightImages, map1x, map1y, map2x, map2y):
 
     return rectifiedLeft, rectifiedRight
 
-def calculateDepthMap(lK, lD, rK, rD, R, T, leftImages, rightImages):
+def calculateDepthMap(calibrationParams, leftImages, rightImages):
     
-    map1x, map1y, map2x, map2y = calcluateRectificationMappings(lK, lD, rK, rD, R, T, leftImages[0].shape)
+    map1x, map1y, map2x, map2y = calcluateRectificationMappings(calibrationParams['leftCameraMatrix'], calibrationParams['leftDistortion'], calibrationParams['rightCameraMatrix'], calibrationParams['rightDistortion'], calibrationParams['R'], calibrationParams['T'], leftImages[0].shape)
 
     rectifiedLeft, rectifiedRight = rectifyStereoImages(leftImages, rightImages, map1x, map1y, map2x, map2y)
 
@@ -97,31 +127,102 @@ def calculateDepthMap(lK, lD, rK, rD, R, T, leftImages, rightImages):
     # ------------------
 
     # stereo = cv.StereoBM.create(numDisparities=16*10, blockSize=15)
-    stereo = cv.StereoSGBM.create(
-        minDisparity=0,
-        numDisparities=16*10,
-        blockSize=7,
-        P1=8*3*9**2,
-        P2=32*3*9**2,
-        mode=cv.STEREO_SGBM_MODE_SGBM_3WAY
-    )
-    for (left, right) in zip(rectifiedLeft, rectifiedRight):
-        vis = draw_epipolar_lines(left, right)
-        cv.imshow('Rectified Pair and disparity Map', vis)
-        cv.waitKey(0)
-        disparity = stereo.compute(cv.cvtColor(left, cv.COLOR_BGR2GRAY), cv.cvtColor(right , cv.COLOR_BGR2GRAY))
-        disparity = cv.normalize(disparity, None, 0, 255, cv.NORM_MINMAX)
-        disparity = np.uint8(disparity)
-        cv.imshow('Disparity map', disparity)
-        cv.waitKey(0)
+    # stereo = cv.StereoSGBM.create(
+    #     minDisparity=0,
+    #     numDisparities=16*10,
+    #     blockSize=7,
+    #     P1=8*3*9**2,
+    #     P2=32*3*9**2,
+    #     mode=cv.STEREO_SGBM_MODE_SGBM_3WAY
+    # )
+    # for (left, right) in zip(rectifiedLeft, rectifiedRight):
+    #     vis = draw_epipolar_lines(left, right)
+    #     cv.imshow('Rectified Pair and disparity Map', vis)
+    #     cv.waitKey(0)
+    #     disparity = stereo.compute(cv.cvtColor(left, cv.COLOR_BGR2GRAY), cv.cvtColor(right , cv.COLOR_BGR2GRAY))
+    #     disparity = cv.normalize(disparity, None, 0, 255, cv.NORM_MINMAX)
+    #     disparity = np.uint8(disparity)
+    #     cv.imshow('Disparity map', disparity)
+    #     cv.waitKey(0)
 
+def loadCalibrationParams(file):
+    config = {}
+    with open(file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            key = key.strip()
+            value = value.strip()
+
+            if key in ('cam0', 'cam1'):
+                # Parse matrix inside brackets [ ... ]
+                value = value.strip('[]')
+                # Split rows by semicolon, columns by space
+                rows = value.split(';')
+                matrix = []
+                for row in rows:
+                    # Split by whitespace, convert to float
+                    row_vals = list(map(float, row.split()))
+                    matrix.append(row_vals)
+                if key == 'cam0':
+                    config['leftCameraMatrix'] = np.array(matrix)
+                else:
+                    config['rightCameraMatrix'] = np.array(matrix)
+            else:
+                # Try to convert to float or int automatically
+                try:
+                    if '.' in value:
+                        config[key] = float(value)
+                    else:
+                        config[key] = int(value)
+                except ValueError:
+                    config[key] = value
+    config['R'] = np.eye(3)
+    config['T'] = np.array([config['baseline'] / 1000.0, 0, 0])
+    config['leftDistortion'] = np.zeros(4)
+    config['rightDistortion'] = np.zeros(4)
+    return config
+
+
+def main():
+    parser = getParser()
+    args = parser.parse_args()
+
+    # Create necessary folders/paths
+    print("---Creating path for depth estimation results.---")
+    args.resultsSavePath = pathlib.Path.joinpath(args.resultsSavePath, datetime.now().strftime("%Y%m%d_%H%M%S"))
+    os.makedirs(args.resultsSavePath, exist_ok=True)
+    # Save arguments use to file
+    saveArgsToYaml(args, pathlib.Path.joinpath(args.resultsSavePath, "config.yaml"))
+    
+    print(f"---Starting depth estimation with: \n {vars(args)}---")
+    
+    leftImages, rightImages = [], []
+    if args.liveCapture:
+        print("---Capturing images from camera.---")
+        # images = captureImagesFromStereoCameras()
+    else:
+        print(f"---Loading images from folder {args.imagesFolder}.---")
+        leftImages, rightImages = monoCalib.loadImages(group="all", folderName=args.imagesFolder)
+    if len(leftImages) == 0 or len(rightImages) == 0:
+        print("No images to use. Quitting.")
+        return
+    
+    print(f"---Load calibration parameters from {args.calibrationParamsFile}.---")
+    calibrationParams = loadCalibrationParams(args.calibrationParamsFile)
+    print(calibrationParams)
+    # monoCalib.showImagesInGrid(leftImages)
+    # monoCalib.showImagesInGrid(rightImages)
+
+    # lK, lD, rK, rD, R, T, E, F = stereoCalib.stereoCameraCalibration(leftImages, rightImages, 9, 6, True)
+
+    depthMap = calculateDepthMap(calibrationParams, leftImages, rightImages)
+    
+    # print(f"---Saving depth map to folder {args.resultsSavePath}---")
+    
+    
 if __name__ == '__main__':
-
-    leftImages, rightImages = monoCalib.loadCalibrationImages("all")
-    monoCalib.showImagesInGrid(leftImages)
-    monoCalib.showImagesInGrid(rightImages)
-
-    lK, lD, rK, rD, R, T, E, F = stereoCalib.stereoCameraCalibration(leftImages, rightImages, 9, 6, True)
-
-    calculateDepthMap(lK, lD, rK, rD, R, T, leftImages, rightImages)
-
+    main()
+    

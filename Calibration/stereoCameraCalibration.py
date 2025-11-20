@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from Utils import utils
-from Calibration.cameraCalibration import monocularCameraCalibration, opencvSingleCameraCalibration, loadCalibrationImages, showImagesInGrid
+from Calibration.cameraCalibration import monocularCameraCalibration, opencvSingleCameraCalibration, loadImages, showImagesInGrid
 
 
 
@@ -331,7 +331,7 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
 
 if __name__ == '__main__':
 
-    leftImages, rightImages = loadCalibrationImages("all")
+    leftImages, rightImages = loadImages("all")
     showImagesInGrid(leftImages)
     showImagesInGrid(rightImages)
 

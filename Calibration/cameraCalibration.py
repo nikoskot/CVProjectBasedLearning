@@ -32,7 +32,7 @@ def saveArgsToYaml(args, filename):
     with open(filename, 'w') as f:
         yaml.dump(args_dict, f, default_flow_style=False)
         
-def loadCalibrationImages(group="all", folderName=None):
+def loadImages(group="all", folderName=None):
     """
     This function is used by external code in order to load the images of the calibration pattern. 
     """
@@ -593,7 +593,7 @@ def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, re
     
     return reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs
 
-def saveCalibrationResults(folderPath, rmse, cameraMatrix, distortionCoeffs):
+def saveCalibrationParams(folderPath, rmse, cameraMatrix, distortionCoeffs):
     try:
         fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "calib.json"), cv.FILE_STORAGE_WRITE)
         fs.write("cameraMatrix", cameraMatrix)
@@ -603,7 +603,7 @@ def saveCalibrationResults(folderPath, rmse, cameraMatrix, distortionCoeffs):
     except Exception as e:
         print(f"Could not save calibration results in file {folderPath}\calib.json. \n Exception {e}")
 
-def loadCalibrationResults(folderPath):
+def loadCalibrationParams(folderPath):
     try:
         fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "calib.json"), cv.FILE_STORAGE_READ)
         cameraMatrix = fs.getNode("cameraMatrix").mat()
@@ -634,7 +634,7 @@ def main():
         images = captureCalibrationImagesFromSingleCamera()
     else:
         print(f"---Loading images from folder {args.imagesFolder}.---")
-        images = loadCalibrationImages(group=args.imagesGroup, folderName=args.imagesFolder)
+        images = loadImages(group=args.imagesGroup, folderName=args.imagesFolder)
     if len(images) == 0:
         print("No images to use. Quitting.")
         return
@@ -644,7 +644,7 @@ def main():
     reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = monocularCameraCalibration(images=images, nCornersPerRow=args.patternRowCorners, nCornersPerColumn=args.patternColumnCorners, refineCorners=(not args.dontRefineCorners), savePath=pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages"))
     
     print(f"---Saving calibration results to folder {args.resultsSavePath}---")
-    saveCalibrationResults(args.resultsSavePath, reprojectionRMSE, cameraMatrix, distortionCoeffs)
+    saveCalibrationParams(args.resultsSavePath, reprojectionRMSE, cameraMatrix, distortionCoeffs)
     
     # print(f"Loading calibration results from folder {args.resultsSavePath}")
     # reprojectionRMSE, cameraMatrix, distortionCoeffs = loadCalibrationResults(args.resultsSavePath)

@@ -1,0 +1,8 @@
+imagesFolder: Depth\depthEstimationImages\data\artroom1
+liveCapture: False
+imagesGroup: all
+patternRowCorners: 9
+patternColumnCorners: 6
+dontRefineCorners: False
+resultsSavePath: Depth\depthEstimationResults
+calibrationParamsFile: Depth\depthEstimationImages\data\artroom1\calib.txt
