@@ -1,8 +1,18 @@
-imagesFolder: Depth\depthEstimationImages\data\artroom1
+imagesFolder: Depth\depthEstimationImages\data\tsukuba
 liveCapture: False
-imagesGroup: all
-patternRowCorners: 9
-patternColumnCorners: 6
-dontRefineCorners: False
 resultsSavePath: Depth\depthEstimationResults
 calibrationParamsFile: Depth\depthEstimationImages\data\artroom1\calib.txt
+rectifyImages: False
+# SGBM Parameters
+minDisparity: 0
+maxDisparity: 64 # dividable by 16
+blockSize: 9
+preFilterCap: 31
+uniquenessRatio: 10
+speckleWindowSize: 100
+speckleRange: 2
+disp12MaxDiff: 1
+
+# WLS Filter Parameters
+wlsLambda: 8000
+wlsSigma: 1.5

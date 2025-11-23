@@ -1,17 +1,12 @@
 import cv2 as cv
 import numpy as np
-
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from Calibration import stereoCameraCalibration as stereoCalib
 from Calibration import cameraCalibration as monoCalib
 import os
 import pathlib
-import plotly.graph_objs as pgo
-import plotly.offline as pyo
 import tqdm
-import time
 import configargparse
 import yaml
 from datetime import datetime
@@ -22,12 +17,19 @@ def getParser():
     # parser = argparse.ArgumentParser(description="Camera Calibration")
     parser.add("--imagesFolder", type=lambda p: pathlib.Path(p).resolve(), default="Depth\depthEstimationImages")
     parser.add("--liveCapture", action="store_true")
-    parser.add("--imagesGroup", type=str, choices=["all", "left", "right"], default="left")
-    parser.add("--patternRowCorners", type=int, default=9)
-    parser.add("--patternColumnCorners", type=int, default=6)
-    parser.add("--dontRefineCorners", action="store_true")
     parser.add("--resultsSavePath", type=lambda p: pathlib.Path(p).resolve(), default="Depth\depthEstimationResults")
     parser.add("--calibrationParamsFile", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationResults")
+    parser.add("--rectifyImages", action="store_true", help="Whether to rectify images before depth estimation")
+    parser.add("--minDisparity", type=int, default=0, help="Minimum possible disparity value")
+    parser.add("--maxDisparity", type=int, default=64, help="Maximum possible disparity value. Must be divisible by 16.")
+    parser.add("--blockSize", type=int, default=9, help="Matched block size. It must be an odd number >=1 ")
+    parser.add("--preFilterCap", type=int, default=31, help="Truncation value for the prefiltered image pixels")
+    parser.add("--uniquenessRatio", type=int, default=10, help="Margin in percentage by which the best (minimum) computed cost function value should 'win' the second best value to consider the found match correct")
+    parser.add("--speckleWindowSize", type=int, default=100, help="Maximum size of smooth disparity regions to consider their noise speckles and invalidate")
+    parser.add("--speckleRange", type=int, default=2, help="Maximum disparity variation within each connected component")
+    parser.add("--disp12MaxDiff", type=int, default=1, help="Maximum allowed difference in the left-right disparity check")
+    parser.add("--wlsLambda", type=float, default=8000.0, help="Amount of regularization during filtering")
+    parser.add("--wlsSigma", type=float, default=1.5, help="Standard deviation of the color filter that is used during filtering")
     return parser
 
 def saveArgsToYaml(args, filename):
@@ -37,13 +39,13 @@ def saveArgsToYaml(args, filename):
     with open(filename, 'w') as f:
         yaml.dump(args_dict, f, default_flow_style=False)
         
-def draw_epipolar_lines(left, right, step=50):
-    left_vis = left.copy()
-    right_vis = right.copy()
+def drawEpipolarLines(left, right, step=50):
+    leftCopy = left.copy()
+    rightCopy = right.copy()
     for y in range(0, left.shape[0], step):
-        cv.line(left_vis,  (0, y), (left.shape[1], y), (0, 255, 0), 1)
-        cv.line(right_vis, (0, y), (right.shape[1], y), (0, 255, 0), 1)
-    return np.hstack((left_vis, right_vis))
+        cv.line(leftCopy,  (0, y), (left.shape[1], y), (0, 255, 0), 1)
+        cv.line(rightCopy, (0, y), (right.shape[1], y), (0, 255, 0), 1)
+    return np.hstack((leftCopy, rightCopy))
 
 def calcluateRectificationMappings(lK, lD, rK, rD, R, T, imageShape):
     h = imageShape[0]
@@ -78,72 +80,58 @@ def rectifyStereoImages(leftImages, rightImages, map1x, map1y, map2x, map2y):
 
     return rectifiedLeft, rectifiedRight
 
-def calculateDepthMap(calibrationParams, leftImages, rightImages):
+def calculateDepthMap(args, calibrationParams, leftImages, rightImages):
     
-    map1x, map1y, map2x, map2y = calcluateRectificationMappings(calibrationParams['leftCameraMatrix'], calibrationParams['leftDistortion'], calibrationParams['rightCameraMatrix'], calibrationParams['rightDistortion'], calibrationParams['R'], calibrationParams['T'], leftImages[0].shape)
+    rectifiedLeft, rectifiedRight = leftImages, rightImages
+    if args.rectifyImages:
+        map1x, map1y, map2x, map2y = calcluateRectificationMappings(calibrationParams['leftCameraMatrix'], calibrationParams['leftDistortion'], calibrationParams['rightCameraMatrix'], calibrationParams['rightDistortion'], calibrationParams['R'], calibrationParams['T'], leftImages[0].shape)
+        rectifiedLeft, rectifiedRight = rectifyStereoImages(leftImages, rightImages, map1x, map1y, map2x, map2y)
 
-    rectifiedLeft, rectifiedRight = rectifyStereoImages(leftImages, rightImages, map1x, map1y, map2x, map2y)
-
-    # ------------------
-    left_matcher = cv.StereoSGBM_create(
-        minDisparity=0,
-        numDisparities=16 * 10,  # max_disp has to be dividable by 16 f. E. HH 192, 256
-        blockSize=7,
-        P1=8 * 3 * 7 ** 2,
-        # wsize default 3; 5; 7 for SGBM reduced size image; 15 for SGBM full size image (1300px and above); 5 Works nicely
-        P2=32 * 3 * 7 ** 2,
-        disp12MaxDiff=1,
-        uniquenessRatio=15,
-        speckleWindowSize=150,
-        speckleRange=1,
-        preFilterCap=63,
-        mode=cv.STEREO_SGBM_MODE_SGBM_3WAY
+    stereo = cv.StereoSGBM_create(
+        minDisparity = args.minDisparity,
+        numDisparities = args.maxDisparity - args.minDisparity,
+        blockSize= args.blockSize,
+        preFilterCap=args.preFilterCap,
+        uniquenessRatio = args.uniquenessRatio,
+        speckleWindowSize = args.speckleWindowSize,
+        speckleRange = args.speckleRange,
+        disp12MaxDiff = args.disp12MaxDiff,
+        P1 = 8 * 1 * args.blockSize**2,
+        P2 = 32 * 1 * args.blockSize**2,
+        mode=cv.STEREO_SGBM_MODE_SGBM
     )
-    right_matcher = cv.ximgproc.createRightMatcher(left_matcher)
-    # FILTER Parameters
-    lmbda = 8000
-    sigma = 1.5
 
-    wls_filter = cv.ximgproc.createDisparityWLSFilter(matcher_left=left_matcher)
-    wls_filter.setLambda(lmbda)
-    wls_filter.setSigmaColor(sigma)
-    for (left, right) in zip(rectifiedLeft, rectifiedRight):
-        vis = draw_epipolar_lines(left, right)
-        cv.imshow('Rectified Pair and disparity Map', vis)
-        cv.waitKey(0)
+    leftMatcher = stereo
+    rightMatcher = cv.ximgproc.createRightMatcher(leftMatcher)
 
-        imgL = cv.cvtColor(left, cv.COLOR_BGR2GRAY)
-        imgR = cv.cvtColor(right, cv.COLOR_BGR2GRAY)
-        displ = left_matcher.compute(imgL, imgR)  # .astype(np.float32)/16
-        dispr = right_matcher.compute(imgR, imgL)  # .astype(np.float32)/16
-        displ = np.int16(displ)
-        dispr = np.int16(dispr)
-        filteredImg = wls_filter.filter(displ, imgL, None, dispr)  # important to put "imgL" here!!!
-        filteredImg = cv.normalize(src=filteredImg, dst=filteredImg, beta=0, alpha=255, norm_type=cv.NORM_MINMAX)
-        filteredImg = np.uint8(filteredImg)
-        cv.imshow('Filtered disparity map', filteredImg)
-        cv.waitKey(0)
-        cv.destroyAllWindows()
-    # ------------------
+    disparity_filter = cv.ximgproc.createDisparityWLSFilter(leftMatcher)
+    disparity_filter.setLambda(args.wlsLambda)
+    disparity_filter.setSigmaColor(args.wlsSigma)
 
-    # stereo = cv.StereoBM.create(numDisparities=16*10, blockSize=15)
-    # stereo = cv.StereoSGBM.create(
-    #     minDisparity=0,
-    #     numDisparities=16*10,
-    #     blockSize=7,
-    #     P1=8*3*9**2,
-    #     P2=32*3*9**2,
-    #     mode=cv.STEREO_SGBM_MODE_SGBM_3WAY
-    # )
-    # for (left, right) in zip(rectifiedLeft, rectifiedRight):
-    #     vis = draw_epipolar_lines(left, right)
-    #     cv.imshow('Rectified Pair and disparity Map', vis)
-    #     cv.waitKey(0)
-    #     disparity = stereo.compute(cv.cvtColor(left, cv.COLOR_BGR2GRAY), cv.cvtColor(right , cv.COLOR_BGR2GRAY))
-    #     disparity = cv.normalize(disparity, None, 0, 255, cv.NORM_MINMAX)
-    #     disparity = np.uint8(disparity)
-    #     cv.imshow('Disparity map', disparity)
-    #     cv.waitKey(0)
+    for i, (left, right) in tqdm.tqdm(enumerate(zip(rectifiedLeft, rectifiedRight)), total=len(rectifiedLeft)):
+        
+        epipolarLines = drawEpipolarLines(left, right)
+        filePath = pathlib.Path.joinpath(args.resultsSavePath, 'epipolarLinesImages', f'{i}.png')
+        print(f"\nSaving epipolarlines visualization to {filePath}")
+        cv.imwrite(filePath, epipolarLines)
+
+        leftGray, rightGray = left, right
+        if len(left.shape) == 3:
+            leftGray = cv.cvtColor(left, cv.COLOR_BGR2GRAY)
+            rightGray = cv.cvtColor(right, cv.COLOR_BGR2GRAY)
+
+        disparityLeft = leftMatcher.compute(leftGray, rightGray)
+        disparityRight = rightMatcher.compute(rightGray, leftGray)
+
+        disparityLeft = np.int16(disparityLeft)
+        disparityRight = np.int16(disparityRight)
+        
+        disparityFiltered = disparity_filter.filter(disparityLeft, leftGray, None, disparityRight)
+
+        disparity = cv.normalize(disparityFiltered, None, alpha=0, beta=255, norm_type=cv.NORM_MINMAX, dtype=cv.CV_8U)
+        filePath = pathlib.Path.joinpath(args.resultsSavePath, 'depthMaps', f'{i}.png')
+        print(f"Saving depth map to {filePath}")
+        cv.imwrite(filePath, disparity)
 
 def loadCalibrationParams(file):
     config = {}
@@ -194,11 +182,14 @@ def main():
     print("---Creating path for depth estimation results.---")
     args.resultsSavePath = pathlib.Path.joinpath(args.resultsSavePath, datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(args.resultsSavePath, exist_ok=True)
+    os.makedirs(pathlib.Path.joinpath(args.resultsSavePath, 'epipolarLinesImages'), exist_ok=True)
+    os.makedirs(pathlib.Path.joinpath(args.resultsSavePath, 'depthMaps'), exist_ok=True)
     # Save arguments use to file
     saveArgsToYaml(args, pathlib.Path.joinpath(args.resultsSavePath, "config.yaml"))
     
-    print(f"---Starting depth estimation with: \n {vars(args)}---")
-    
+    print("---Starting depth estimation with:")
+    print('\n'.join(f"{k}: {v}" for k, v in vars(args).items()))
+
     leftImages, rightImages = [], []
     if args.liveCapture:
         print("---Capturing images from camera.---")
@@ -216,12 +207,8 @@ def main():
     # monoCalib.showImagesInGrid(leftImages)
     # monoCalib.showImagesInGrid(rightImages)
 
-    # lK, lD, rK, rD, R, T, E, F = stereoCalib.stereoCameraCalibration(leftImages, rightImages, 9, 6, True)
-
-    depthMap = calculateDepthMap(calibrationParams, leftImages, rightImages)
-    
-    # print(f"---Saving depth map to folder {args.resultsSavePath}---")
-    
+    print("---Calculating depth maps.---")
+    calculateDepthMap(args, calibrationParams, leftImages, rightImages)
     
 if __name__ == '__main__':
     main()
