@@ -3,14 +3,37 @@ import os
 import numpy as np
 from scipy.spatial.transform import Rotation
 import rerun as rr
-
+import configargparse
+import pathlib
+from datetime import datetime
+import yaml
+import time
 import sys
+import tqdm
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from Utils import utils
-from Calibration.cameraCalibration import monocularCameraCalibration, opencvSingleCameraCalibration, loadImages, showImagesInGrid
+from Calibration import cameraCalibration as monoCalib
 
+def getParser():
+    parser = configargparse.ArgParser(default_config_files=["Calibration\stereoCalibrationConfig.yaml"])
+    parser.add("--configFile", is_config_file=True, help='config file path')
+    # parser = argparse.ArgumentParser(description="Camera Calibration")
+    parser.add("--imagesFolder", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationImages")
+    parser.add("--liveCapture", action="store_true")
+    parser.add("--imagesGroup", type=str, choices=["left", "right"], default="all")
+    parser.add("--patternRowCorners", type=int, default=9)
+    parser.add("--patternColumnCorners", type=int, default=6)
+    parser.add("--dontRefineCorners", action="store_true")
+    parser.add("--resultsSavePath", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\stereoCalibrationResults")
+    return parser
 
+def saveArgsToYaml(args, filename):
+    # Convert Namespace to dict
+    args_dict = vars(args)
+    # Dump to YAML file
+    with open(filename, 'w') as f:
+        yaml.dump(args_dict, f, default_flow_style=False)
 
 def openCVStereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
 
@@ -246,62 +269,59 @@ def visualizeSetup(R, T, K1, K2):
     rr.log("world/right_cam/axes", rr.Arrows3D(origins=np.zeros((3, 3)), vectors=np.eye(3), colors=[[255, 0, 0], [0, 255, 0], [0, 0, 255]]), static=True)
     rr.log("world/right_cam/image", rr.Pinhole(image_from_camera=K2, resolution=[640, 480]), static=True)
 
-def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
+def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True, savePath=None):
     worldCoordsSingle = np.zeros((nCornersPerRow*nCornersPerColumn, 3), np.float32)
     worldCoordsSingle[:, :2] = np.mgrid[0:nCornersPerRow, 0:nCornersPerColumn].T.reshape(-1, 2)
-    leftImageCoords = [] 
+    leftImageCoords = []
+    rightImageCoords = [] 
     worldCoords = []
     h, w, _ = leftImages[0].shape
     
-    for i, img in enumerate(leftImages):
+    print("Detecting pattern cornenrs.")
+    for i in tqdm.tqdm(range(len(leftImages))):
         # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-        ret, corners = cv.findChessboardCorners(img, (nCornersPerRow, nCornersPerColumn))
+        ret, corners = cv.findChessboardCorners(leftImages[i], (nCornersPerRow, nCornersPerColumn))
         if not ret:
-            print(f"No chessboard corners found in image {i}")
-            cv.imshow(f"No corners {i}", img)
+            print(f"No chessboard corners found in left image {i}")
+            cv.imshow(f"No corners {i}", leftImages[i])
             cv.waitKey(1000)
             cv.destroyAllWindows()
             continue
         
         if refineCorners:
-            corners = cv.cornerSubPix(cv.cvtColor(img, cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-            # corners = cv.cornerSubPix(img, corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            corners = cv.cornerSubPix(cv.cvtColor(leftImages[i], cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
         
-        img_copy = img.copy()
-        cv.drawChessboardCorners(img_copy, (nCornersPerRow, nCornersPerColumn), corners, ret)
-        cv.imshow(f"Annotated corners {i}", img_copy)
-        cv.waitKey(500)
-        cv.destroyAllWindows()
+        if savePath:
+            imgCopy = leftImages[i].copy()
+            cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners, ret)
+            cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedLeft{i}.png"), imgCopy)
 
         leftImageCoords.append(corners.reshape(-1, 2))
         worldCoords.append(worldCoordsSingle)
 
-    rightImageCoords = [] 
-
-    for i, img in enumerate(rightImages):
-        # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-        ret, corners = cv.findChessboardCorners(img, (nCornersPerRow, nCornersPerColumn))
+        ret, corners = cv.findChessboardCorners(rightImages[i], (nCornersPerRow, nCornersPerColumn))
         if not ret:
-            print(f"No chessboard corners found in image {i}")
-            cv.imshow(f"No corners {i}", img)
+            print(f"No chessboard corners found in right image {i}")
+            cv.imshow(f"No corners {i}", rightImages[i])
             cv.waitKey(1000)
             cv.destroyAllWindows()
             continue
         
         if refineCorners:
-            corners = cv.cornerSubPix(cv.cvtColor(img, cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-            # corners = cv.cornerSubPix(img, corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            corners = cv.cornerSubPix(cv.cvtColor(rightImages[i], cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
         
-        img_copy = img.copy()   
-        cv.drawChessboardCorners(img_copy, (nCornersPerRow, nCornersPerColumn), corners, ret)
-        cv.imshow(f"Annotated corners {i}", img_copy)
-        cv.waitKey(500)
-        cv.destroyAllWindows()
+        if savePath:
+            imgCopy = rightImages[i].copy()
+            cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners, ret)
+            cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedRight{i}.png"), imgCopy)
 
         rightImageCoords.append(corners.reshape(-1, 2))
 
-    lK, lRs, lTs, lDistortionCoeffs = opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
-    rK, rRs, rTs, rDistortionCoeffs = opencvSingleCameraCalibration(rightImages, worldCoords, rightImageCoords)
+    print("Calibrating.")
+    start = time.time()
+    lK, lRs, lTs, lDistortionCoeffs = monoCalib.opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
+    rK, rRs, rTs, rDistortionCoeffs = monoCalib.opencvSingleCameraCalibration(rightImages, worldCoords, rightImageCoords)
+    
 
     print(f"Left Camera Matrix: \n{lK}")
     print(f"Left Camera Distortion coefficients: \n{lDistortionCoeffs}")
@@ -316,6 +336,7 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
         criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 1e-5),
         flags=cv.CALIB_FIX_INTRINSIC
     )
+    print(f"amera calibration took {time.time() - start}.")
 
     print(f"Stereo calibration RMSE: \n{ret}")
     print(f"Left Camera Matrix after Stereo Calibration: \n{lK}")
@@ -329,19 +350,44 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
     
     return lK, lD, rK, rD, R, T, E, F
 
-if __name__ == '__main__':
+def main():
+    parser = getParser()
+    args = parser.parse_args()
 
-    leftImages, rightImages = loadImages("all")
-    showImagesInGrid(leftImages)
-    showImagesInGrid(rightImages)
+    # Create necessary folders/paths
+    print("---Creating path for calibration results.---")
+    args.resultsSavePath = pathlib.Path.joinpath(args.resultsSavePath, datetime.now().strftime("%Y%m%d_%H%M%S"))
+    os.makedirs(args.resultsSavePath, exist_ok=True)
+    os.makedirs(pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages"), exist_ok=True)
+    # Save arguments use to file
+    saveArgsToYaml(args, pathlib.Path.joinpath(args.resultsSavePath, "config.yaml"))
 
-    # stereoCameraCalibration(leftImages, rightImages, 9, 6, True)
-    print("------------ OpenCV -------------")
-    leftK, leftDist, rightK, rightDist, R, T, E, F = openCVStereoCameraCalibration(leftImages, rightImages, 9, 6, True)
+    print(f"---Starting stereo camera calibration with: \n {vars(args)}---")
 
-    # rr.init("stereo_calibration", spawn=True)
-    # visualizeSetup(R, T, leftK, rightK)
+    images = []
+    if args.liveCapture:
+        print("---Capturing calibration images from two cameras.---")
+        # images = captureImagesFromStereoCameras()
+    else:
+        print(f"---Loading images from folder {args.imagesFolder}.---")
+        leftImages, rightImages = monoCalib.loadImages(group="all", folderName=args.imagesFolder)
+    if len(leftImages) == 0 or len(rightImages) == 0:
+        print("At least one set of images is empty. Quitting.")
+        return
+    if len(leftImages) != len(rightImages):
+        print("Left/Right set of images are not the same number. Quitting.")
+        return
+    # showImagesInGrid(leftImages)
+    # showImagesInGrid(rightImages)
 
-    print("------------ Manual -------------")
-    manualStereoCameraCalibration(leftImages, rightImages, 9, 6, True)
+    reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = stereoCameraCalibration(images=images, nCornersPerRow=args.patternRowCorners, nCornersPerColumn=args.patternColumnCorners, refineCorners=(not args.dontRefineCorners), savePath=pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages"))
+
+    print(f"---Saving calibration results to folder {args.resultsSavePath}---")
+    saveCalibrationParams(args.resultsSavePath, reprojectionRMSE, cameraMatrix, distortionCoeffs)
     
+    # print(f"Loading calibration results from folder {args.resultsSavePath}")
+    # calibrationParameters = loadCalibrationResults(args.resultsSavePath)
+    
+
+if __name__ == '__main__':
+    main()

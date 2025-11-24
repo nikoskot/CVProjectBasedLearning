@@ -556,7 +556,7 @@ def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, re
     worldCoords = []
 
     print("Detecting pattern cornenrs.")
-    for i, img in tqdm.tqdm(enumerate(images)):
+    for i, img in tqdm.tqdm(enumerate(images), total=len(images)):
         # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
         ret, corners = cv.findChessboardCorners(img, (nCornersPerRow, nCornersPerColumn))
         if not ret:
