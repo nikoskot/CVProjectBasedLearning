@@ -1,7 +1,6 @@
 imagesFolder: Calibration\calibrationImages
 liveCapture: True
-imagesGroup: right
 patternRowCorners: 9
 patternColumnCorners: 6
 dontRefineCorners: False
-resultsSavePath: Calibration\calibrationResults
+resultsSavePath: Calibration\stereoCalibrationResults

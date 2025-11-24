@@ -21,7 +21,7 @@ def getParser():
     # parser = argparse.ArgumentParser(description="Camera Calibration")
     parser.add("--imagesFolder", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\calibrationImages")
     parser.add("--liveCapture", action="store_true")
-    parser.add("--imagesGroup", type=str, choices=["left", "right"], default="all")
+    # parser.add("--imagesGroup", type=str, choices=["left", "right"], default="all")
     parser.add("--patternRowCorners", type=int, default=9)
     parser.add("--patternColumnCorners", type=int, default=6)
     parser.add("--dontRefineCorners", action="store_true")
@@ -34,6 +34,81 @@ def saveArgsToYaml(args, filename):
     # Dump to YAML file
     with open(filename, 'w') as f:
         yaml.dump(args_dict, f, default_flow_style=False)
+
+def captureCalibrationImagesFromTwoCameras():
+    
+    cap0 = cv.VideoCapture(0)
+    cap1 = cv.VideoCapture(1)
+    if not (cap0.isOpened() and cap1.isOpened()):
+        print("Cannot open cameras.")
+        return
+
+    cap0.set(cv.CAP_PROP_FRAME_WIDTH, 1920)   # width in pixels
+    cap0.set(cv.CAP_PROP_FRAME_HEIGHT, 1080)   # height in pixels
+    cap1.set(cv.CAP_PROP_FRAME_WIDTH, 1920)   # width in pixels
+    cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 1080)   # height in pixels
+
+    save_interval = 3.0  # seconds between saves
+    saving = False
+    last_save_time = 0
+
+    frame_count = 0  # count saved frames
+    leftImages = []
+    rightImages = []
+    info0 = "Left Camera. 's' tp start saving. 'q' to stop"
+    info1 = "Right Camera. 's' tp start saving. 'q' to stop"
+    
+    while True:
+        ret0, frame0 = cap0.read()
+        ret1, frame1 = cap1.read()
+        if not (ret0 and ret1):
+            print("Can't receive frame from at least one camera (stream end?). Exiting ...")
+            break
+
+        current_time = time.time()
+        frame0Copy = cv.flip(frame0.copy(), 1)
+        frame1Copy = cv.flip(frame1.copy(), 1)
+
+        # If saving mode started, check time and save frames every "save_interval" seconds
+        if saving:
+            elapsed = current_time - last_save_time
+
+            # Calculate countdown (seconds remaining to next save)
+            countdown = max(0, save_interval - elapsed)
+            countdown_text = f"Next capture in: {countdown:.1f}s"
+
+            # Put countdown text on frame
+            cv.putText(frame0Copy, countdown_text, (10, 30), cv.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 0, 255), 2, cv.LINE_AA)
+
+            if elapsed >= save_interval:
+                # Save frame
+                leftImages.append(frame0)
+                rightImages.append(frame1)
+                frame_count += 1
+                last_save_time = current_time
+
+        else:
+            # Show instruction
+            cv.putText(frame0Copy, f"Press 's' to start saving every {save_interval} seconds", (10, 30),
+                        cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv.LINE_AA)
+
+        cv.imshow(info0, frame0Copy)
+        cv.imshow(info1, frame0Copy)
+
+        key = cv.waitKey(1) & 0xFF
+        if key == ord('q'):  # Quit on 'q'
+            break
+        elif key == ord('s'):  # Start saving on 's'
+            if not saving:
+                cv.destroyAllWindows()
+                saving = True
+                last_save_time = current_time
+
+    cap0.release()
+    cap1.release()
+    cv.destroyAllWindows()
+    return leftImages, rightImages
 
 def openCVStereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
 
@@ -319,37 +394,78 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
 
     print("Calibrating.")
     start = time.time()
-    lK, lRs, lTs, lDistortionCoeffs = monoCalib.opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
-    rK, rRs, rTs, rDistortionCoeffs = monoCalib.opencvSingleCameraCalibration(rightImages, worldCoords, rightImageCoords)
-    
+    leftRmse, leftCameraMatrix, leftDistortionCoeffs, leftRotationVecs, leftTranslationVecs = monoCalib.opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
+    rightRmse, rightCameraMatrix, rightDistortionCoeffs, rightRotationVecs, rightTranslationVecs = monoCalib.opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
 
-    print(f"Left Camera Matrix: \n{lK}")
-    print(f"Left Camera Distortion coefficients: \n{lDistortionCoeffs}")
+    print(f"Left monocular calibration RMSE (pixels): \n{leftRmse}")
+    print(f"Left camera matrix: \n{leftCameraMatrix}")
+    print(f"Left camera distortion coefficients: \n{leftDistortionCoeffs}")
     
-    print(f"Right Camera Matrix: \n{rK}")
-    print(f"Right Camera Distortion coefficients: \n{rDistortionCoeffs}")
+    print(f"Right monocular calibration RMSE (pixels): \n{rightRmse}")
+    print(f"Right camera matrix: \n{rightCameraMatrix}")
+    print(f"Right camera distortion coefficients: \n{rightDistortionCoeffs}")
 
-    ret, lK, lD, rK, rD, R, T, E, F = cv.stereoCalibrate(
-        worldCoords, leftImageCoords, rightImageCoords,
-        lK, lDistortionCoeffs, rK, rDistortionCoeffs,
+    stereoRmse, _, _, _, _, R, T, E, F = cv.stereoCalibrate(
+        worldCoords, 
+        leftImageCoords, 
+        rightImageCoords,
+        leftCameraMatrix, 
+        leftDistortionCoeffs, 
+        rightCameraMatrix, 
+        rightDistortionCoeffs,
         (w, h),
-        criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 1e-5),
         flags=cv.CALIB_FIX_INTRINSIC
     )
-    print(f"amera calibration took {time.time() - start}.")
+    
+    print(f"Stereo setup calibration took {time.time() - start}.")
 
-    print(f"Stereo calibration RMSE: \n{ret}")
-    print(f"Left Camera Matrix after Stereo Calibration: \n{lK}")
-    print(f"Left Camera Distortion coefficients after Stereo Calibration: \n{lD}")
-    print(f"Right Camera Matrix after Stereo Calibration: \n{rK}")
-    print(f"Right Camera Distortion coefficients after Stereo Calibration: \n{rD}")
+    print(f"Stereo calibration RMSE: \n{stereoRmse}")
     print(f"Rotation between cameras: \n{R}")
     print(f"Translation between cameras: \n{T}")
     print(f"Essential Matrix: \n{E}")
     print(f"Fundamental Matrix: \n{F}")
     
-    return lK, lD, rK, rD, R, T, E, F
+    return stereoRmse, leftCameraMatrix, leftDistortionCoeffs, rightCameraMatrix, rightDistortionCoeffs, R, T, E, F
 
+def saveCalibrationParams(folderPath, stereoRmse, leftCameraMatrix, leftDistortionCoeffs, rightCameraMatrix, rightDistortionCoeffs, R, T, E, F):
+    try:
+        fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "stereoCalib.json"), cv.FILE_STORAGE_WRITE)
+        fs.write("leftCameraMatrix", leftCameraMatrix)
+        fs.write("leftDistortionCoeffs", leftDistortionCoeffs)
+        fs.write("rightCameraMatrix", rightCameraMatrix)
+        fs.write("rightDistortionCoeffs", rightDistortionCoeffs)
+        fs.write("rmse", stereoRmse)
+        fs.write("R", R)
+        fs.write("T", T)
+        fs.write("E", E)
+        fs.write("F", F)
+        fs.release()
+    except Exception as e:
+        print(f"Could not save stereo calibration results in file {folderPath}\stereoCalib.json. \n Exception {e}")
+
+def loadCalibrationParams(folderPath):
+    calib_path = pathlib.Path(folderPath) / "stereoCalib.json"
+    fs = cv.FileStorage(str(calib_path), cv.FILE_STORAGE_READ)
+
+    if not fs.isOpened():
+        raise FileNotFoundError(f"Could not open {calib_path}")
+
+    data = {}
+
+    root = fs.getFirstTopLevelNode()
+    while not root.empty():
+        key = root.name()
+        if root.isReal():
+            data[key] = root.real()
+        elif root.isString():
+            data[key] = root.string()
+        else:
+            data[key] = root.mat()
+        root = root.next()
+
+    fs.release()
+    return data
+        
 def main():
     parser = getParser()
     args = parser.parse_args()
@@ -367,7 +483,7 @@ def main():
     images = []
     if args.liveCapture:
         print("---Capturing calibration images from two cameras.---")
-        # images = captureImagesFromStereoCameras()
+        leftImages, rightImages = captureCalibrationImagesFromTwoCameras()
     else:
         print(f"---Loading images from folder {args.imagesFolder}.---")
         leftImages, rightImages = monoCalib.loadImages(group="all", folderName=args.imagesFolder)
@@ -377,16 +493,24 @@ def main():
     if len(leftImages) != len(rightImages):
         print("Left/Right set of images are not the same number. Quitting.")
         return
+    
     # showImagesInGrid(leftImages)
     # showImagesInGrid(rightImages)
 
-    reprojectionRMSE, cameraMatrix, distortionCoeffs, rotationVecs, translationVecs = stereoCameraCalibration(images=images, nCornersPerRow=args.patternRowCorners, nCornersPerColumn=args.patternColumnCorners, refineCorners=(not args.dontRefineCorners), savePath=pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages"))
+    stereoRmse, leftCameraMatrix, leftDistortionCoeffs, rightCameraMatrix, rightDistortionCoeffs, R, T, E, F = stereoCameraCalibration(
+        leftImages=leftImages, 
+        rightImages=rightImages, 
+        nCornersPerRow=args.patternRowCorners, 
+        nCornersPerColumn=args.patternColumnCorners, 
+        refineCorners=(not args.dontRefineCorners), 
+        savePath=pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages")
+        )
 
     print(f"---Saving calibration results to folder {args.resultsSavePath}---")
-    saveCalibrationParams(args.resultsSavePath, reprojectionRMSE, cameraMatrix, distortionCoeffs)
+    saveCalibrationParams(args.resultsSavePath, stereoRmse, leftCameraMatrix, leftDistortionCoeffs, rightCameraMatrix, rightDistortionCoeffs, R, T, E, F)
     
     # print(f"Loading calibration results from folder {args.resultsSavePath}")
-    # calibrationParameters = loadCalibrationResults(args.resultsSavePath)
+    # calibrationParams = loadCalibrationResults(args.resultsSavePath)
     
 
 if __name__ == '__main__':
