@@ -36,17 +36,19 @@ def saveArgsToYaml(args, filename):
         yaml.dump(args_dict, f, default_flow_style=False)
 
 def captureCalibrationImagesFromTwoCameras():
-    
-    cap0 = cv.VideoCapture(0)
-    cap1 = cv.VideoCapture(1)
+    api = cv.CAP_MSMF
+    cap0 = cv.VideoCapture(0, api)
+    cap1 = cv.VideoCapture(1, api)
     if not (cap0.isOpened() and cap1.isOpened()):
         print("Cannot open cameras.")
         return
 
-    cap0.set(cv.CAP_PROP_FRAME_WIDTH, 1920)   # width in pixels
-    cap0.set(cv.CAP_PROP_FRAME_HEIGHT, 1080)   # height in pixels
-    cap1.set(cv.CAP_PROP_FRAME_WIDTH, 1920)   # width in pixels
-    cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 1080)   # height in pixels
+    cap0.set(cv.CAP_PROP_FRAME_WIDTH, 1280)   # width in pixels
+    cap0.set(cv.CAP_PROP_FRAME_HEIGHT, 720)   # height in pixels
+    cap0.set(cv.CAP_PROP_FPS, 30)  # frames per second
+    cap1.set(cv.CAP_PROP_FRAME_WIDTH, 1280)   # width in pixels
+    cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 720)   # height in pixels
+    cap1.set(cv.CAP_PROP_FPS, 30)
 
     save_interval = 3.0  # seconds between saves
     saving = False
@@ -94,7 +96,7 @@ def captureCalibrationImagesFromTwoCameras():
                         cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv.LINE_AA)
 
         cv.imshow(info0, frame0Copy)
-        cv.imshow(info1, frame0Copy)
+        cv.imshow(info1, frame1Copy)
 
         key = cv.waitKey(1) & 0xFF
         if key == ord('q'):  # Quit on 'q'
@@ -165,8 +167,8 @@ def openCVStereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCo
 
         rightImageCoords.append(corners.reshape(-1, 2))
 
-    lK, lRs, lTs, lDistortionCoeffs = opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
-    rK, rRs, rTs, rDistortionCoeffs = opencvSingleCameraCalibration(rightImages, worldCoords, rightImageCoords)
+    lK, lRs, lTs, lDistortionCoeffs = monoCalib.opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
+    rK, rRs, rTs, rDistortionCoeffs = monoCalib.opencvSingleCameraCalibration(rightImages, worldCoords, rightImageCoords)
 
     print(f"Left Camera Matrix: \n{lK}")
     print(f"Left Camera Distortion coefficients: \n{lDistortionCoeffs}")
@@ -249,8 +251,8 @@ def manualStereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCo
 
         rightImageCoords.append(corners.reshape(-1, 2))
 
-    lK, lRs, lTs, lDistortionCoeffs = opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
-    rK, rRs, rTs, rDistortionCoeffs = opencvSingleCameraCalibration(rightImages, worldCoords, rightImageCoords)
+    lK, lRs, lTs, lDistortionCoeffs = monoCalib.opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
+    rK, rRs, rTs, rDistortionCoeffs = monoCalib.opencvSingleCameraCalibration(rightImages, worldCoords, rightImageCoords)
 
     print(f"Left Camera Matrix: \n{lK}")
     print(f"Left Camera Distortion coefficients: \n{lDistortionCoeffs}")
