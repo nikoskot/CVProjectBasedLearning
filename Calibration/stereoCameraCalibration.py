@@ -37,18 +37,29 @@ def saveArgsToYaml(args, filename):
 
 def captureCalibrationImagesFromTwoCameras():
     api = cv.CAP_MSMF
-    cap0 = cv.VideoCapture(0, api)
-    cap1 = cv.VideoCapture(1, api)
-    if not (cap0.isOpened() and cap1.isOpened()):
-        print("Cannot open cameras.")
+    cameraWidth = 1920
+    cameraHeight = 1080
+    cameraFps = 60
+    
+    cap0 = cv.VideoCapture(0)
+    if not cap0.isOpened():
+        print("Cannot open camera 0.")
         return
-
-    cap0.set(cv.CAP_PROP_FRAME_WIDTH, 1280)   # width in pixels
-    cap0.set(cv.CAP_PROP_FRAME_HEIGHT, 720)   # height in pixels
-    cap0.set(cv.CAP_PROP_FPS, 30)  # frames per second
-    cap1.set(cv.CAP_PROP_FRAME_WIDTH, 1280)   # width in pixels
-    cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 720)   # height in pixels
-    cap1.set(cv.CAP_PROP_FPS, 30)
+    else: 
+        print("Camera 0 opened.")
+    cap0.set(cv.CAP_PROP_FRAME_WIDTH, cameraWidth)   # width in pixels
+    cap0.set(cv.CAP_PROP_FRAME_HEIGHT, cameraHeight)   # height in pixels
+    cap0.set(cv.CAP_PROP_FPS, cameraFps)  # frames per second
+    
+    cap1 = cv.VideoCapture(1)
+    if not cap1.isOpened():
+        print("Cannot open camera 1.")
+        return
+    else: 
+        print("Camera 1 opened.")
+    cap1.set(cv.CAP_PROP_FRAME_WIDTH, cameraWidth)   # width in pixels
+    cap1.set(cv.CAP_PROP_FRAME_HEIGHT, cameraHeight)   # height in pixels
+    cap1.set(cv.CAP_PROP_FPS, cameraFps)
 
     save_interval = 3.0  # seconds between saves
     saving = False
@@ -57,8 +68,8 @@ def captureCalibrationImagesFromTwoCameras():
     frame_count = 0  # count saved frames
     leftImages = []
     rightImages = []
-    info0 = "Left Camera. 's' tp start saving. 'q' to stop"
-    info1 = "Right Camera. 's' tp start saving. 'q' to stop"
+    info0 = "Camera 0. 's' tp start saving. 'q' to stop"
+    info1 = "Camera 1. 's' tp start saving. 'q' to stop"
     
     while True:
         ret0, frame0 = cap0.read()
@@ -68,8 +79,8 @@ def captureCalibrationImagesFromTwoCameras():
             break
 
         current_time = time.time()
-        frame0Copy = cv.flip(frame0.copy(), 1)
-        frame1Copy = cv.flip(frame1.copy(), 1)
+        frame0Copy = cv.resize(cv.flip(frame0.copy(), 1), (1280, 720))
+        frame1Copy = cv.resize(cv.flip(frame1.copy(), 1), (1280, 720))
 
         # If saving mode started, check time and save frames every "save_interval" seconds
         if saving:
@@ -110,6 +121,7 @@ def captureCalibrationImagesFromTwoCameras():
     cap0.release()
     cap1.release()
     cv.destroyAllWindows()
+    print(f"Captured {len(leftImages)} left and {len(rightImages)} right images.") 
     return leftImages, rightImages
 
 def openCVStereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True):
@@ -357,27 +369,16 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
     print("Detecting pattern cornenrs.")
     for i in tqdm.tqdm(range(len(leftImages))):
         # img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-        ret, corners = cv.findChessboardCorners(leftImages[i], (nCornersPerRow, nCornersPerColumn))
-        if not ret:
+        ret0, corners0 = cv.findChessboardCorners(leftImages[i], (nCornersPerRow, nCornersPerColumn))
+        ret1, corners1 = cv.findChessboardCorners(rightImages[i], (nCornersPerRow, nCornersPerColumn))
+        
+        if not ret0:
             print(f"No chessboard corners found in left image {i}")
             cv.imshow(f"No corners {i}", leftImages[i])
             cv.waitKey(1000)
             cv.destroyAllWindows()
             continue
-        
-        if refineCorners:
-            corners = cv.cornerSubPix(cv.cvtColor(leftImages[i], cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-        
-        if savePath:
-            imgCopy = leftImages[i].copy()
-            cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners, ret)
-            cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedLeft{i}.png"), imgCopy)
-
-        leftImageCoords.append(corners.reshape(-1, 2))
-        worldCoords.append(worldCoordsSingle)
-
-        ret, corners = cv.findChessboardCorners(rightImages[i], (nCornersPerRow, nCornersPerColumn))
-        if not ret:
+        if not ret1:
             print(f"No chessboard corners found in right image {i}")
             cv.imshow(f"No corners {i}", rightImages[i])
             cv.waitKey(1000)
@@ -385,19 +386,25 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
             continue
         
         if refineCorners:
-            corners = cv.cornerSubPix(cv.cvtColor(rightImages[i], cv.COLOR_BGR2GRAY), corners, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-        
+            corners0 = cv.cornerSubPix(cv.cvtColor(leftImages[i], cv.COLOR_BGR2GRAY), corners0, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            corners1 = cv.cornerSubPix(cv.cvtColor(rightImages[i], cv.COLOR_BGR2GRAY), corners1, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            
         if savePath:
+            imgCopy = leftImages[i].copy()
+            cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners0, ret0)
+            cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedLeft{i}.png"), imgCopy)
             imgCopy = rightImages[i].copy()
-            cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners, ret)
+            cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners1, ret1)
             cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedRight{i}.png"), imgCopy)
 
-        rightImageCoords.append(corners.reshape(-1, 2))
+        leftImageCoords.append(corners0.reshape(-1, 2))
+        worldCoords.append(worldCoordsSingle)
+        rightImageCoords.append(corners1.reshape(-1, 2))
 
     print("Calibrating.")
     start = time.time()
     leftRmse, leftCameraMatrix, leftDistortionCoeffs, leftRotationVecs, leftTranslationVecs = monoCalib.opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
-    rightRmse, rightCameraMatrix, rightDistortionCoeffs, rightRotationVecs, rightTranslationVecs = monoCalib.opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
+    rightRmse, rightCameraMatrix, rightDistortionCoeffs, rightRotationVecs, rightTranslationVecs = monoCalib.opencvSingleCameraCalibration(rightImages, worldCoords, rightImageCoords)
 
     print(f"Left monocular calibration RMSE (pixels): \n{leftRmse}")
     print(f"Left camera matrix: \n{leftCameraMatrix}")
