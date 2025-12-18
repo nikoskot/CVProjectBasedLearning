@@ -10,7 +10,7 @@ class Dataset():
     def __init__(self, path):
         p = Path(path)
         
-        self.frames = []
+        self.frames = [] # list of Frame objects
         
         if p.exists():
             

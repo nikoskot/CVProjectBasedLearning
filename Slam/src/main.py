@@ -1,6 +1,15 @@
 import configargparse
 import yaml
 from pathlib import Path
+import numpy as np
+import sys
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from src.core.frame import Frame
+from src.core.camera import Camera, loadIntrinsicsFromJson
+from src.core.pose import Pose
+from src.core.state import State
+from src.io.dataset import Dataset
+from src.visualization.trajectory import plotPointCloud, plotTrajectory
 
 def getParser():
     parser = configargparse.ArgParser(default_config_files=["Slam\configs\default.yaml"])
@@ -8,11 +17,27 @@ def getParser():
     # parser = argparse.ArgumentParser(description="Camera Calibration")
     parser.add("--datasetPath", type=lambda p: Path(p).resolve(), default="Slam\data")
     parser.add("--resultsSavePath", type=lambda p: Path(p).resolve(), default="Slam\results")
-    parser.add("--cameraParamsFile", type=lambda p: Path(p).resolve(), default="Slam\data\camera\intrinsics.txt")
+    parser.add("--cameraParamsFile", type=lambda p: Path(p).resolve(), default="Slam\data\camera\intrinsics.json")
     return parser
 
 def main():
-    pass
+    parser = getParser()
+    args = parser.parse_args()
+    print(f"---Starting SLAM process with: \n {vars(args)}---")
+    
+    dataset = Dataset(args.datasetPath)
+    
+    intrinsics = loadIntrinsicsFromJson(args.cameraParamsFile)
+    camera = Camera(intrinsics, 640, 480)
+    
+    state = State()
+    
+    for frame in dataset.frames:
+        frame.pose = Pose(frame.idx, np.eye(3), np.zeros(3) + np.array([0, 0, frame.idx]))
+        
+        state.changeCurrentPose(frame.pose)
+    
+    plotTrajectory(state, camera, dataset)
 
 if __name__ == "__main__":
     main()
