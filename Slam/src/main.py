@@ -4,11 +4,10 @@ from pathlib import Path
 import numpy as np
 import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from src.core.frame import Frame
 from src.core.camera import Camera, loadIntrinsicsFromJson
 from src.core.pose import Pose
 from src.core.state import State
-from src.io.dataset import Dataset
+from src.io.dataset import Dataset, GroundtruthPosesDataset
 from src.visualization.trajectory import plotPointCloud, plotTrajectory
 
 def getParser():
@@ -27,6 +26,8 @@ def main():
     
     dataset = Dataset(args.datasetPath)
     
+    gtPosesDataset = GroundtruthPosesDataset("D:\\Documents\\Repos\\CVProjectBasedLearning\\Slam\\data\\rgbd_dataset_freiburg1_xyz\\groundtruth.txt", dataset)
+    
     intrinsics = loadIntrinsicsFromJson(args.cameraParamsFile)
     camera = Camera(intrinsics, 640, 480)
     
@@ -34,6 +35,8 @@ def main():
     
     for frame in dataset.frames:
         frame.pose = Pose(frame.idx, np.eye(3), np.zeros(3) + np.array([0, 0, frame.idx]))
+        frame.pose = Pose(frame.idx, np.array([[1, 0, 0], [0, 0.707, -0.707], [0, 0.707, 0.707]]), np.zeros(3) + np.array([0, 0, frame.idx])) # 45 degree around x
+        frame.pose = gtPosesDataset.gtPoses[frame.idx] # from ground truth poses
         
         state.changeCurrentPose(frame.pose)
     
