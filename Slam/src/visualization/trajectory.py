@@ -3,11 +3,12 @@ import numpy as np
 from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-from src.core.pose import Pose
+from src.core.camera import Camera
+from src.core.state import State
+from src.io.dataset import Dataset
 
-def plotTrajectory(state, camera, dataset):
+def plotTrajectory(state : State, camera : Camera, dataset : Dataset):
     
-    rr.init("SLAM", spawn=True)
     rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)
     
     positions = []
@@ -26,7 +27,3 @@ def plotTrajectory(state, camera, dataset):
         rr.log("world/trajectory/camera", rr.Image(dataset.frames[pose.frameId].image))
     
     rr.log("world/trajectory/line", rr.LineStrips3D([positions]), static=True)
-    
-def plotPointCloud(state):
-    
-    rr.log("world/pointCloud/points", rr.Points3D(state.map_points, colors=[255, 255, 255, 255]))

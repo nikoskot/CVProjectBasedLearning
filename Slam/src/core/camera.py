@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.typing import NDArray
 import json
 
 class Camera():
@@ -22,7 +23,7 @@ class Camera():
         self.height = height
         
     
-    def project3dTo2d(self, X_world, R, t):
+    def project3dTo2d(self, X_world : NDArray[np.float32], R : NDArray[np.float32], t : NDArray[np.float32]):
         """
         xWorld: (3,) world point [X, Y, Z]
         intrinsics: (3,3) intrinsic matrix
@@ -47,7 +48,7 @@ class Camera():
 
         return np.array([u, v])
     
-    def backProjection(self, u, v):
+    def backProjection(self, u : NDArray[np.float32], v : NDArray[np.float32]):
         """
         Returns a unit ray direction in the camera frame.
         Shape: (3,)
@@ -61,7 +62,7 @@ class Camera():
         return ray / np.linalg.norm(ray)
 
 
-def loadIntrinsicsFromJson(jsonFilePath):
+def loadIntrinsicsFromJson(jsonFilePath : str):
     intrinsics = {}
     
     try:

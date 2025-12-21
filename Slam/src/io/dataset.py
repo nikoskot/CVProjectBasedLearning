@@ -9,7 +9,7 @@ from src.core.pose import Pose
 
 class Dataset():
     
-    def __init__(self, imagesPath):
+    def __init__(self, imagesPath : str, step=1):
         p = Path(imagesPath)
         
         self.frames = [] # list of Frame objects
@@ -46,11 +46,12 @@ class Dataset():
                 
                 imageFiles = list(p.glob("*"))
                 idx = 0
-                for imgFile in imageFiles:
+                for i in range(0, len(imageFiles), step):
+                    imgFile = imageFiles[i]
                     if imgFile.is_file():
                         frame = cv.imread(str(imgFile))
                         
-                        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                        gray = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
                         
                         # Try to get timestap from file name. If impossible timestamp is equal to -1 always
                         timestamp = -1
@@ -69,7 +70,7 @@ class Dataset():
             
 class GroundtruthPosesDataset():
     
-    def __init__(self, groundTruthPosesPath, framesDataset):
+    def __init__(self, groundTruthPosesPath : str, framesDataset : Dataset):
         
         self.gtPoses = []
         

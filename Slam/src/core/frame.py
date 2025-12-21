@@ -1,8 +1,9 @@
 import numpy as np
+from numpy.typing import NDArray
 
 class Frame:
     
-    def __init__(self, image, idx, timestamp):
+    def __init__(self, image : NDArray[np.float32], idx : int, timestamp : float):
         self.image = image
         self.idx = idx
         self.timestamp = timestamp

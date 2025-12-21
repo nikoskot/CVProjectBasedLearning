@@ -1,3 +1,3 @@
-datasetPath: Slam\data
+datasetPath: D:\Documents\Repos\CVProjectBasedLearning\Slam\data\rgbd_dataset_freiburg1_xyz\rgb
 resultsSavePath: Slam\results
-cameraParamsFile: Slam\data\camera\intrinsics.txt
+cameraParamsFile: D:\Documents\Repos\CVProjectBasedLearning\Slam\data\rgbd_dataset_freiburg1_xyz\intrinsics.json
