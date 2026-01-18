@@ -8,3 +8,7 @@ class Frame:
         self.idx = idx
         self.timestamp = timestamp
         self.pose = (np.eye(3), np.zeros(3))
+        self.keypoints = []
+        self.descriptors = []
+        self.observations = [] # [(landmark_id, keypoint_idx)]
+        self.trajectoryIndex = -1

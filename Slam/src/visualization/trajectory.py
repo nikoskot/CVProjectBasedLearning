@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from src.core.camera import Camera
+from src.core.pose import Pose
 from src.core.state import State
 from src.io.dataset import Dataset
 
@@ -17,13 +18,16 @@ def plotTrajectory(state : State, camera : Camera, dataset : Dataset):
     
     for pose in state.trajectory:
         
-        position = np.array([pose.t_wc[0], pose.t_wc[1], pose.t_wc[2]])
-        positions.append([pose.t_wc[0], pose.t_wc[1], pose.t_wc[2]])
+        poseCopy = Pose(pose.frameId, pose.R_cw.T, -pose.R_cw.T @ pose.t_cw)
+        # poseCopy = Pose(pose.frameId, pose.R_cw, pose.t_cw)
         
-        rr.set_time("frameId", sequence=pose.frameId)
+        position = np.array([poseCopy.t_cw[0], poseCopy.t_cw[1], poseCopy.t_cw[2]])
+        positions.append([poseCopy.t_cw[0], poseCopy.t_cw[1], poseCopy.t_cw[2]])
+        
+        rr.set_time("frameId", sequence=poseCopy.frameId)
         rr.log("world/trajectory/cameraCenter", rr.Points3D(position, radii=0.5))
         
-        rr.log("world/trajectory/camera", rr.Transform3D(mat3x3=pose.R_wc, translation=pose.t_wc))
-        rr.log("world/trajectory/camera", rr.Image(dataset.frames[pose.frameId].image))
+        rr.log("world/trajectory/camera", rr.Transform3D(mat3x3=poseCopy.R_cw, translation=poseCopy.t_cw))
+        rr.log("world/trajectory/camera", rr.Image(dataset.frames[poseCopy.frameId].image))
     
-    rr.log("world/trajectory/line", rr.LineStrips3D([positions]), static=True)
+        rr.log("world/trajectory/line", rr.LineStrips3D([positions]))

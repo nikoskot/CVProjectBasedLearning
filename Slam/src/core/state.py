@@ -11,6 +11,7 @@ class State():
         self.currentCameraPose = None
         self.trajectory = []    # list of poses
         self.map_points = []
+        self.keyframesIds = []  # list of frame ids that are keyframes
     
     def changeCurrentPose(self, pose):
         self.currentCameraPose = pose
@@ -23,9 +24,9 @@ class State():
         y = []
         z = []
         for p in self.trajectory:
-            x.append(p.t_wc[0])
-            y.append(p.t_wc[1])
-            z.append(p.t_wc[2])
+            x.append(p.t_cw[0])
+            y.append(p.t_cw[1])
+            z.append(p.t_cw[2])
 
         ax.plot(x, y, z, label='Trajectory')
         # ax.scatter(x, y, z)  # show points
