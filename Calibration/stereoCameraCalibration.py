@@ -24,6 +24,7 @@ def getParser():
     # parser.add("--imagesGroup", type=str, choices=["left", "right"], default="all")
     parser.add("--patternRowCorners", type=int, default=9)
     parser.add("--patternColumnCorners", type=int, default=6)
+    parser.add("--patternGridSize", type=int, default=1)
     parser.add("--dontRefineCorners", action="store_true")
     parser.add("--resultsSavePath", type=lambda p: pathlib.Path(p).resolve(), default="Calibration\stereoCalibrationResults")
     return parser
@@ -352,15 +353,15 @@ def visualizeSetup(R, T, K1, K2):
     rr.log("world/left_cam", rr.Transform3D(mat3x3=R, translation=T.flatten()), static=True)
     # rr.log("left_cam/frame", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
     rr.log("world/left_cam/axes", rr.Arrows3D(origins=np.zeros((3, 3)), vectors=np.eye(3), colors=[[255, 0, 0], [0, 255, 0], [0, 0, 255]]), static=True)
-    rr.log("world/left_cam/image", rr.Pinhole(image_from_camera=K1, resolution=[640, 480]), static=True)
+    rr.log("world/left_cam/image", rr.Pinhole(image_from_camera=K1, resolution=[1920, 1080]), static=True)
     # Right camera
     rr.log("world/right_cam", rr.Transform3D(mat3x3=np.eye(3), translation=[0,0,0]), static=True)
     rr.log("world/right_cam/axes", rr.Arrows3D(origins=np.zeros((3, 3)), vectors=np.eye(3), colors=[[255, 0, 0], [0, 255, 0], [0, 0, 255]]), static=True)
-    rr.log("world/right_cam/image", rr.Pinhole(image_from_camera=K2, resolution=[640, 480]), static=True)
+    rr.log("world/right_cam/image", rr.Pinhole(image_from_camera=K2, resolution=[1920, 1080]), static=True)
 
-def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersPerColumn=6, refineCorners=True, savePath=None):
+def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersPerColumn=6, patternGridSize=1, refineCorners=True, savePath=None):
     worldCoordsSingle = np.zeros((nCornersPerRow*nCornersPerColumn, 3), np.float32)
-    worldCoordsSingle[:, :2] = np.mgrid[0:nCornersPerRow, 0:nCornersPerColumn].T.reshape(-1, 2)
+    worldCoordsSingle[:, :2] = np.mgrid[0:nCornersPerRow, 0:nCornersPerColumn].T.reshape(-1, 2) * patternGridSize
     leftImageCoords = []
     rightImageCoords = [] 
     worldCoords = []
@@ -510,7 +511,8 @@ def main():
         leftImages=leftImages, 
         rightImages=rightImages, 
         nCornersPerRow=args.patternRowCorners, 
-        nCornersPerColumn=args.patternColumnCorners, 
+        nCornersPerColumn=args.patternColumnCorners,
+        patternGridSize=args.patternGridSize, 
         refineCorners=(not args.dontRefineCorners), 
         savePath=pathlib.Path.joinpath(args.resultsSavePath, "annotatedImages")
         )
@@ -520,6 +522,9 @@ def main():
     
     # print(f"Loading calibration results from folder {args.resultsSavePath}")
     # calibrationParams = loadCalibrationResults(args.resultsSavePath)
+    
+    rr.init("stereo_calibration", spawn=True)
+    visualizeSetup(R, T, leftCameraMatrix, rightCameraMatrix)
     
 
 if __name__ == '__main__':
