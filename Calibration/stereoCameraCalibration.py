@@ -7,6 +7,7 @@ import configargparse
 import pathlib
 from datetime import datetime
 import yaml
+import json
 import time
 import sys
 import tqdm
@@ -69,8 +70,8 @@ def captureCalibrationImagesFromTwoCameras():
     frame_count = 0  # count saved frames
     leftImages = []
     rightImages = []
-    info0 = "Camera 0. 's' tp start saving. 'q' to stop"
-    info1 = "Camera 1. 's' tp start saving. 'q' to stop"
+    info0 = "Camera 0 (Left). 's' tp start saving. 'q' to stop. 'f' to stop and switch left to right images"
+    info1 = "Camera 1 (Right). 's' tp start saving. 'q' to stop. 'f' to stop and switch left to right images"
     
     while True:
         ret0, frame0 = cap0.read()
@@ -80,8 +81,8 @@ def captureCalibrationImagesFromTwoCameras():
             break
 
         current_time = time.time()
-        frame0Copy = cv.resize(cv.flip(frame0.copy(), 1), (1280, 720))
-        frame1Copy = cv.resize(cv.flip(frame1.copy(), 1), (1280, 720))
+        frame0Copy = cv.resize(cv.flip(frame0.copy(), 1), (640, 480))
+        frame1Copy = cv.resize(cv.flip(frame1.copy(), 1), (640, 480))
 
         # If saving mode started, check time and save frames every "save_interval" seconds
         if saving:
@@ -112,6 +113,11 @@ def captureCalibrationImagesFromTwoCameras():
 
         key = cv.waitKey(1) & 0xFF
         if key == ord('q'):  # Quit on 'q'
+            break
+        if key == ord('f'):  # Quit and switch left and right images on 'f'. In case video capture has wrong camera order
+            leftImagesCopy = leftImages.copy()
+            leftImages = rightImages.copy()
+            rightImages = leftImagesCopy
             break
         elif key == ord('s'):  # Start saving on 's'
             if not saving:
@@ -439,42 +445,84 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
 
 def saveCalibrationParams(folderPath, stereoRmse, leftCameraMatrix, leftDistortionCoeffs, rightCameraMatrix, rightDistortionCoeffs, R, T, E, F):
     try:
-        fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "stereoCalib.json"), cv.FILE_STORAGE_WRITE)
-        fs.write("leftCameraMatrix", leftCameraMatrix)
-        fs.write("leftDistortionCoeffs", leftDistortionCoeffs)
-        fs.write("rightCameraMatrix", rightCameraMatrix)
-        fs.write("rightDistortionCoeffs", rightDistortionCoeffs)
-        fs.write("rmse", stereoRmse)
-        fs.write("R", R)
-        fs.write("T", T)
-        fs.write("E", E)
-        fs.write("F", F)
-        fs.release()
+        params = {
+            "leftCameraMatrix": leftCameraMatrix.tolist(),
+            "leftDistortionCoeffs": leftDistortionCoeffs.tolist(),
+            "rightCameraMatrix": rightCameraMatrix.tolist(),
+            "rightDistortionCoeffs": rightDistortionCoeffs.tolist(),
+            "rmse": stereoRmse,
+            "R": R.tolist(),
+            "T": T.tolist(),
+            "E": E.tolist(),
+            "F": F.tolist(),
+        }
+        
+        with open(pathlib.Path.joinpath(folderPath, "stereoCalib.json"), "w") as f:
+            json.dump(params, f, indent=2)
+            
     except Exception as e:
         print(f"Could not save stereo calibration results in file {folderPath}\stereoCalib.json. \n Exception {e}")
+        
+# def saveCalibrationParams(folderPath, stereoRmse, leftCameraMatrix, leftDistortionCoeffs, rightCameraMatrix, rightDistortionCoeffs, R, T, E, F):
+#     try:
+#         fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "stereoCalib.json"), cv.FILE_STORAGE_WRITE)
+#         fs.write("leftCameraMatrix", leftCameraMatrix)
+#         fs.write("leftDistortionCoeffs", leftDistortionCoeffs)
+#         fs.write("rightCameraMatrix", rightCameraMatrix)
+#         fs.write("rightDistortionCoeffs", rightDistortionCoeffs)
+#         fs.write("rmse", stereoRmse)
+#         fs.write("R", R)
+#         fs.write("T", T)
+#         fs.write("E", E)
+#         fs.write("F", F)
+#         fs.release()
+#     except Exception as e:
+#         print(f"Could not save stereo calibration results in file {folderPath}\stereoCalib.json. \n Exception {e}")
 
 def loadCalibrationParams(folderPath):
-    calib_path = pathlib.Path(folderPath) / "stereoCalib.json"
-    fs = cv.FileStorage(str(calib_path), cv.FILE_STORAGE_READ)
+    try:
+        with open(pathlib.Path.joinpath(folderPath, "stereoCalib.json"), "r") as f:
+            data = json.load(f)
+            
+        params = {
+            "leftCameraMatrix": np.array(data["leftCameraMatrix"], dtype=np.float64),
+            "leftDistortionCoeffs": np.array(data["leftDistortionCoeffs"], dtype=np.float64),
+            "rightCameraMatrix": np.array(data["rightCameraMatrix"], dtype=np.float64),
+            "rightDistortionCoeffs": np.array(data["rightDistortionCoeffs"], dtype=np.float64),
+            "rmse": data["rmse"],
+            "R": np.array(data["R"], dtype=np.float64),
+            "T": np.array(data["T"], dtype=np.float64),
+            "E": np.array(data["E"], dtype=np.float64),
+            "F": np.array(data["F"], dtype=np.float64),
+        }
+        
+        return params
+    
+    except Exception as e:
+        print(f"Could not load calibration results from file {folderPath}\calib.json. \n Exception {e}")
 
-    if not fs.isOpened():
-        raise FileNotFoundError(f"Could not open {calib_path}")
+# def loadCalibrationParams(folderPath):
+#     calib_path = pathlib.Path(folderPath) / "stereoCalib.json"
+#     fs = cv.FileStorage(str(calib_path), cv.FILE_STORAGE_READ)
 
-    data = {}
+#     if not fs.isOpened():
+#         raise FileNotFoundError(f"Could not open {calib_path}")
 
-    root = fs.getFirstTopLevelNode()
-    while not root.empty():
-        key = root.name()
-        if root.isReal():
-            data[key] = root.real()
-        elif root.isString():
-            data[key] = root.string()
-        else:
-            data[key] = root.mat()
-        root = root.next()
+#     data = {}
 
-    fs.release()
-    return data
+#     root = fs.getFirstTopLevelNode()
+#     while not root.empty():
+#         key = root.name()
+#         if root.isReal():
+#             data[key] = root.real()
+#         elif root.isString():
+#             data[key] = root.string()
+#         else:
+#             data[key] = root.mat()
+#         root = root.next()
+
+#     fs.release()
+#     return data
         
 def main():
     parser = getParser()
@@ -520,8 +568,9 @@ def main():
     print(f"---Saving calibration results to folder {args.resultsSavePath}---")
     saveCalibrationParams(args.resultsSavePath, stereoRmse, leftCameraMatrix, leftDistortionCoeffs, rightCameraMatrix, rightDistortionCoeffs, R, T, E, F)
     
-    # print(f"Loading calibration results from folder {args.resultsSavePath}")
-    # calibrationParams = loadCalibrationResults(args.resultsSavePath)
+    print(f"Loading calibration results from folder {args.resultsSavePath}")
+    calibrationParams = loadCalibrationParams(args.resultsSavePath)
+    print(f"Loaded calibration parameters: \n {calibrationParams}")
     
     rr.init("stereo_calibration", spawn=True)
     visualizeSetup(R, T, leftCameraMatrix, rightCameraMatrix)
