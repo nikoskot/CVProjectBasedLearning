@@ -81,8 +81,8 @@ def captureCalibrationImagesFromTwoCameras():
             break
 
         current_time = time.time()
-        frame0Copy = cv.resize(cv.flip(frame0.copy(), 1), (640, 480))
-        frame1Copy = cv.resize(cv.flip(frame1.copy(), 1), (640, 480))
+        frame0Copy = cv.resize(cv.flip(frame0.copy(), 1), (640, 360))
+        frame1Copy = cv.resize(cv.flip(frame1.copy(), 1), (640, 360))
 
         # If saving mode started, check time and save frames every "save_interval" seconds
         if saving:
@@ -368,9 +368,13 @@ def visualizeSetup(R, T, K1, K2):
 def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersPerColumn=6, patternGridSize=1, refineCorners=True, savePath=None):
     worldCoordsSingle = np.zeros((nCornersPerRow*nCornersPerColumn, 3), np.float32)
     worldCoordsSingle[:, :2] = np.mgrid[0:nCornersPerRow, 0:nCornersPerColumn].T.reshape(-1, 2) * patternGridSize
-    leftImageCoords = []
-    rightImageCoords = [] 
-    worldCoords = []
+    leftStereoImageCoords = []
+    rightStereoImageCoords = [] 
+    stereoWorldCoords = []
+    leftMonoImageCoords = []
+    rightMonoImageCoords = []
+    leftMonoWorldCoords = []
+    rightMonoWorldCoords = []
     h, w, _ = leftImages[0].shape
     
     print("Detecting pattern cornenrs.")
@@ -379,6 +383,29 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
         ret0, corners0 = cv.findChessboardCorners(leftImages[i], (nCornersPerRow, nCornersPerColumn))
         ret1, corners1 = cv.findChessboardCorners(rightImages[i], (nCornersPerRow, nCornersPerColumn))
         
+        # If there is a pattern detected in the left image, use it for the monoculat calibration of the left camera for sure
+        if ret0:
+            if refineCorners:
+                corners0 = cv.cornerSubPix(cv.cvtColor(leftImages[i], cv.COLOR_BGR2GRAY), corners0, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            if savePath:
+                imgCopy = leftImages[i].copy()
+                cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners0, ret0)
+                cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedLeftMono{i}.png"), imgCopy)
+            leftMonoImageCoords.append(corners0.reshape(-1, 2))
+            leftMonoWorldCoords.append(worldCoordsSingle)
+        
+        # If there is a pattern detected in the right image, use it for the monoculat calibration of the right camera for sure
+        if ret1:
+            if refineCorners:
+                corners1 = cv.cornerSubPix(cv.cvtColor(rightImages[i], cv.COLOR_BGR2GRAY), corners1, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            if savePath:
+                imgCopy = rightImages[i].copy()
+                cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners1, ret1)
+                cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedRightMono{i}.png"), imgCopy)
+            rightMonoImageCoords.append(corners1.reshape(-1, 2))
+            rightMonoWorldCoords.append(worldCoordsSingle)
+        
+        # If either of the images does not have the pattern visible, do not use it for stereo calibration    
         if not ret0:
             print(f"No chessboard corners found in left image {i}")
             cv.imshow(f"No corners {i}", leftImages[i])
@@ -392,26 +419,26 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
             cv.destroyAllWindows()
             continue
         
-        if refineCorners:
-            corners0 = cv.cornerSubPix(cv.cvtColor(leftImages[i], cv.COLOR_BGR2GRAY), corners0, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-            corners1 = cv.cornerSubPix(cv.cvtColor(rightImages[i], cv.COLOR_BGR2GRAY), corners1, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+        # if refineCorners:
+        #     corners0 = cv.cornerSubPix(cv.cvtColor(leftImages[i], cv.COLOR_BGR2GRAY), corners0, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+        #     corners1 = cv.cornerSubPix(cv.cvtColor(rightImages[i], cv.COLOR_BGR2GRAY), corners1, (11,11), (-1,-1), (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001))
             
         if savePath:
             imgCopy = leftImages[i].copy()
             cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners0, ret0)
-            cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedLeft{i}.png"), imgCopy)
+            cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedLeftStereo{i}.png"), imgCopy)
             imgCopy = rightImages[i].copy()
             cv.drawChessboardCorners(imgCopy, (nCornersPerRow, nCornersPerColumn), corners1, ret1)
-            cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedRight{i}.png"), imgCopy)
+            cv.imwrite(pathlib.Path.joinpath(savePath, f"annotatedRightStereo{i}.png"), imgCopy)
 
-        leftImageCoords.append(corners0.reshape(-1, 2))
-        worldCoords.append(worldCoordsSingle)
-        rightImageCoords.append(corners1.reshape(-1, 2))
+        leftStereoImageCoords.append(corners0.reshape(-1, 2))
+        stereoWorldCoords.append(worldCoordsSingle)
+        rightStereoImageCoords.append(corners1.reshape(-1, 2))
 
     print("Calibrating.")
     start = time.time()
-    leftRmse, leftCameraMatrix, leftDistortionCoeffs, leftRotationVecs, leftTranslationVecs = monoCalib.opencvSingleCameraCalibration(leftImages, worldCoords, leftImageCoords)
-    rightRmse, rightCameraMatrix, rightDistortionCoeffs, rightRotationVecs, rightTranslationVecs = monoCalib.opencvSingleCameraCalibration(rightImages, worldCoords, rightImageCoords)
+    leftRmse, leftCameraMatrix, leftDistortionCoeffs, leftRotationVecs, leftTranslationVecs = monoCalib.opencvSingleCameraCalibration(leftImages, leftMonoWorldCoords, leftMonoImageCoords)
+    rightRmse, rightCameraMatrix, rightDistortionCoeffs, rightRotationVecs, rightTranslationVecs = monoCalib.opencvSingleCameraCalibration(rightImages, rightMonoWorldCoords, rightMonoImageCoords)
 
     print(f"Left monocular calibration RMSE (pixels): \n{leftRmse}")
     print(f"Left camera matrix: \n{leftCameraMatrix}")
@@ -421,10 +448,10 @@ def stereoCameraCalibration(leftImages, rightImages, nCornersPerRow=9, nCornersP
     print(f"Right camera matrix: \n{rightCameraMatrix}")
     print(f"Right camera distortion coefficients: \n{rightDistortionCoeffs}")
 
-    stereoRmse, _, _, _, _, R, T, E, F = cv.stereoCalibrate(
-        worldCoords, 
-        leftImageCoords, 
-        rightImageCoords,
+    stereoRmse, leftCameraMatrix, leftDistortionCoeffs, rightCameraMatrix, rightDistortionCoeffs, R, T, E, F = cv.stereoCalibrate(
+        stereoWorldCoords, 
+        leftStereoImageCoords, 
+        rightStereoImageCoords,
         leftCameraMatrix, 
         leftDistortionCoeffs, 
         rightCameraMatrix, 

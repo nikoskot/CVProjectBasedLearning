@@ -31,7 +31,7 @@ def calcluateRectificationMappings(lK, lD, rK, rD, R, T, imageShape):
     w = imageShape[1]
 
     lR, rR, lP, rP, Q, lRoi, rRoi = cv.stereoRectify(
-        lK, lD, rK, rD, (w, h), R, T, alpha=-1
+        lK, lD, rK, rD, (w, h), R, T, flags=cv.CALIB_ZERO_DISPARITY, alpha=0
     )
     
     map1x, map1y = cv.initUndistortRectifyMap(lK, lD, lR, lP, (w, h), cv.CV_32FC1)
@@ -150,21 +150,20 @@ def depthWithTracking(calibrationParams):
                 
                 # ------------Manual search----------------
                 # patchHalfSize = 100
-                # template = rectifiedLeft[lY-patchHalfSize:lY+patchHalfSize, lX-patchHalfSize:lX+patchHalfSize]
+                # template = clahe.apply(cv.cvtColor(rectifiedLeft[lY-patchHalfSize:lY+patchHalfSize, lX-patchHalfSize:lX+patchHalfSize], cv.COLOR_BGR2GRAY))
 
                 # bestXRight = None
                 # bestScore = float('inf')
 
                 # maxDisparity = 1000
                 # for rX in range(max(lX - maxDisparity, patchHalfSize), lX):
-                #     patch = rectifiedRight[lY-patchHalfSize:lY+patchHalfSize, rX-patchHalfSize:rX+patchHalfSize]
+                #     patch = clahe.apply(cv.cvtColor(rectifiedRight[lY-patchHalfSize:lY+patchHalfSize, rX-patchHalfSize:rX+patchHalfSize], cv.COLOR_BGR2GRAY))
                 #     score = np.sum((template - patch)**2)
                 #     if score < bestScore:
                 #         bestScore = score
                 #         bestXRight = rX
                 # rX = bestXRight
                 # d = abs(rX - lX)
-                
                 
                 # --------------Search with disparity calculator-------------
                 disparity = disparityCalculator.compute(clahe.apply(cv.cvtColor(rectifiedLeft, cv.COLOR_BGR2GRAY)), clahe.apply(cv.cvtColor(rectifiedRight, cv.COLOR_BGR2GRAY)))
