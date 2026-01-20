@@ -37,7 +37,7 @@ def calcluateRectificationMappings(lK, lD, rK, rD, R, T, imageShape):
     map1x, map1y = cv.initUndistortRectifyMap(lK, lD, lR, lP, (w, h), cv.CV_32FC1)
     map2x, map2y = cv.initUndistortRectifyMap(rK, rD, rR, rP, (w, h), cv.CV_32FC1)
 
-    return map1x, map1y, map2x, map2y
+    return map1x, map1y, map2x, map2y, lP, rP
 
 def rectifyStereoFrames(leftFrame, rightFrame, map1x, map1y, map2x, map2y):
 
@@ -84,11 +84,13 @@ def depthWithTracking(calibrationParams):
     info0 = "Camera 0 (Left). 'q' to stop"
     info1 = "Camera 1 (Right). 'q' to stop"
     
-    trackerInitialized = False
+    # Calcuate rectification mappings for the two cameras
+    map1x, map1y, map2x, map2y, lP, rP = calcluateRectificationMappings(calibrationParams['leftCameraMatrix'], calibrationParams['leftDistortionCoeffs'], calibrationParams['rightCameraMatrix'], calibrationParams['rightDistortionCoeffs'], calibrationParams['R'], calibrationParams['T'], (cameraHeight, cameraWidth))
     
+    trackerInitialized = False
     while True:
         
-        # Capture and show camera frames
+        # Capture camera frames
         ret0, frame0 = cap0.read()
         ret1, frame1 = cap1.read()
         if not ret0:
@@ -98,27 +100,28 @@ def depthWithTracking(calibrationParams):
             print("Can't receive frame from camera 1 (stream end?). Exiting ...")
             break
 
+        # Resize to fit all on screen 
         frame0Copy = cv.resize(frame0.copy(), (640, 360))
         frame1Copy = cv.resize(frame1.copy(), (640, 360))
-        # cv.imshow(info0, frame0Copy)
-        # cv.imshow(info1, frame1Copy)
         
         # Rectify images
-        map1x, map1y, map2x, map2y = calcluateRectificationMappings(calibrationParams['leftCameraMatrix'], calibrationParams['leftDistortionCoeffs'], calibrationParams['rightCameraMatrix'], calibrationParams['rightDistortionCoeffs'], calibrationParams['R'], calibrationParams['T'], frame0.shape)
         rectifiedLeft, rectifiedRight = rectifyStereoFrames(frame0, frame1, map1x, map1y, map2x, map2y)
         
-        
         key = cv.waitKey(1) & 0xFF
-        if key == ord('q'):  # Quit on 'q'
+        # Quit on 'q'
+        if key == ord('q'):  
             break
-        if key == ord('t'):  # 't' to initialize tracker with object
+        # 't' to initialize tracker with object
+        if key == ord('t'):  
             # Select object
             bbox = cv.selectROI("Tracker initialization", rectifiedLeft)
             cv.destroyWindow("Tracker initialization")
 
+            # Initialize tracker
             tracker = cv.TrackerCSRT_create()
             tracker.init(rectifiedLeft, bbox)
             
+            # Initialize disparity calculator and histogram equalization
             disparityCalculator = cv.StereoSGBM_create(
                                     minDisparity=0,
                                     numDisparities=320,
@@ -129,63 +132,66 @@ def depthWithTracking(calibrationParams):
                                     uniquenessRatio=10,
                                     speckleWindowSize=100,
                                     speckleRange=32
-)
+                                    )
+            clahe = cv.createCLAHE(2.0, (8,8))
             
             trackerInitialized = True
         
         if trackerInitialized:
+            # Try to track object in the new frame
             success, bbox = tracker.update(rectifiedLeft)
 
             if success:
+                # New position
                 x, y, w, h = map(int, bbox)
-                cv.rectangle(rectifiedLeft, (x,y), (x+w,y+h), (0,255,0), 2)
-                
                 objCenterLeftX, objCenterLeftY = (x + w//2, y + h//2)
-                
                 lY = int(objCenterLeftY)
                 lX = int(objCenterLeftX)
                 
                 # ------------Manual search----------------
-                patchHalfSize = 100
-                template = rectifiedLeft[lY-patchHalfSize:lY+patchHalfSize, lX-patchHalfSize:lX+patchHalfSize]
+                # patchHalfSize = 100
+                # template = rectifiedLeft[lY-patchHalfSize:lY+patchHalfSize, lX-patchHalfSize:lX+patchHalfSize]
 
-                bestXRight = None
-                bestScore = float('inf')
+                # bestXRight = None
+                # bestScore = float('inf')
 
-                maxDisparity = 1000
-                for rX in range(max(lX - maxDisparity, patchHalfSize), lX):
-                    patch = rectifiedRight[lY-patchHalfSize:lY+patchHalfSize, rX-patchHalfSize:rX+patchHalfSize]
-                    score = np.sum((template - patch)**2)
-                    if score < bestScore:
-                        bestScore = score
-                        bestXRight = rX
-                rX = bestXRight
+                # maxDisparity = 1000
+                # for rX in range(max(lX - maxDisparity, patchHalfSize), lX):
+                #     patch = rectifiedRight[lY-patchHalfSize:lY+patchHalfSize, rX-patchHalfSize:rX+patchHalfSize]
+                #     score = np.sum((template - patch)**2)
+                #     if score < bestScore:
+                #         bestScore = score
+                #         bestXRight = rX
+                # rX = bestXRight
+                # d = abs(rX - lX)
                 
                 
                 # --------------Search with disparity calculator-------------
-                # disparity = disparityCalculator.compute(rectifiedLeft, rectifiedRight)
-                # disparity = disparity / 16.0
-                # d = disparity[lY, lX]
-                # print(d)
-                # rX = int(lX - d)
+                disparity = disparityCalculator.compute(clahe.apply(cv.cvtColor(rectifiedLeft, cv.COLOR_BGR2GRAY)), clahe.apply(cv.cvtColor(rectifiedRight, cv.COLOR_BGR2GRAY)))
+                disparity = disparity / 16.0
+                d = disparity[lY, lX]
+                rX = int(lX - d)
+                disp_vis = cv.normalize(disparity, None, 0, 255, cv.NORM_MINMAX)
+                disp_vis = disp_vis.astype(np.uint8)
+                cv.imshow("Disparity", cv.resize(disp_vis, (640, 380)))
                 
+                # Draw rectangle and center markers
+                cv.rectangle(rectifiedLeft, (x,y), (x+w,y+h), (0,255,0), 2)
                 cv.drawMarker(rectifiedLeft, (lX, lY), (0,0,255), markerSize=30, thickness=4)
                 cv.drawMarker(rectifiedRight, (rX, lY), (0,0,255), markerSize=30, thickness=4)
-                # disp_vis = cv.normalize(disparity, None, 0, 255, cv.NORM_MINMAX)
-                # disp_vis = disp_vis.astype(np.uint8)
-                # cv.imshow("Disparity", cv.resize(disp_vis, (640, 380)))
+                
+                # Z = f * Baseline / disparity
+                print(f"Depth in mm: {(lP[0,0] * np.abs(rP[0,3]/rP[0,0])) / d}")
                 
             else:
-                # cv.putText(frame, "Tracking failure", (20,40),
-                #             cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-                pass
+                print("Tracking failed.")
+                trackerInitialized = False
         
         cv.imshow(info0, frame0Copy)
         cv.imshow(info1, frame1Copy)
         
         # Show rectified frames side by side with epipolar lines
         cv.imshow("Rectified, scaled down, with epipolar lines", drawEpipolarLines(rectifiedLeft, rectifiedRight))
-            
         
     cap0.release()
     cap1.release()

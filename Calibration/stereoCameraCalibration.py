@@ -43,7 +43,7 @@ def captureCalibrationImagesFromTwoCameras():
     cameraHeight = 1080
     cameraFps = 60
     
-    cap0 = cv.VideoCapture(0)
+    cap0 = cv.VideoCapture(1)
     if not cap0.isOpened():
         print("Cannot open camera 0.")
         return
@@ -53,7 +53,7 @@ def captureCalibrationImagesFromTwoCameras():
     cap0.set(cv.CAP_PROP_FRAME_HEIGHT, cameraHeight)   # height in pixels
     cap0.set(cv.CAP_PROP_FPS, cameraFps)  # frames per second
     
-    cap1 = cv.VideoCapture(1)
+    cap1 = cv.VideoCapture(0)
     if not cap1.isOpened():
         print("Cannot open camera 1.")
         return
