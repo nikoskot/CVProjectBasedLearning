@@ -9,6 +9,7 @@ import tqdm
 import time
 import configargparse
 import yaml
+import json
 from datetime import datetime
 
 def getParser():
@@ -594,24 +595,54 @@ def monocularCameraCalibration(images, nCornersPerRow=9, nCornersPerColumn=6, re
 
 def saveCalibrationParams(folderPath, rmse, cameraMatrix, distortionCoeffs):
     try:
-        fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "calib.json"), cv.FILE_STORAGE_WRITE)
-        fs.write("cameraMatrix", cameraMatrix)
-        fs.write("distortionCoeffs", distortionCoeffs)
-        fs.write("rmse", rmse)
-        fs.release()
+        params = {
+            "cameraMatrix": cameraMatrix.tolist(),
+            "distortionCoeffs": distortionCoeffs.tolist(),
+            "rmse": rmse,
+        }
+        
+        with open(pathlib.Path.joinpath(folderPath, "calib.json"), "w") as f:
+            json.dump(params, f, indent=2)
+            
     except Exception as e:
         print(f"Could not save calibration results in file {folderPath}\calib.json. \n Exception {e}")
 
+# def saveCalibrationParams(folderPath, rmse, cameraMatrix, distortionCoeffs):
+#     try:
+#         fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "calib.json"), cv.FILE_STORAGE_WRITE)
+#         fs.write("cameraMatrix", cameraMatrix)
+#         fs.write("distortionCoeffs", distortionCoeffs)
+#         fs.write("rmse", rmse)
+#         fs.release()
+#     except Exception as e:
+#         print(f"Could not save calibration results in file {folderPath}\calib.json. \n Exception {e}")
+
 def loadCalibrationParams(folderPath):
     try:
-        fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "calib.json"), cv.FILE_STORAGE_READ)
-        cameraMatrix = fs.getNode("cameraMatrix").mat()
-        distortionCoeffs = fs.getNode("distortionCoeffs").mat()
-        rmse = fs.getNode("rmse").real()
-        fs.release()
-        return rmse, cameraMatrix, distortionCoeffs
+        with open(pathlib.Path.joinpath(folderPath, "calib.json"), "r") as f:
+            data = json.load(f)
+
+        params = {
+            "cameraMatrix" : np.array(data["cameraMatrix"], dtype=np.float64),
+            "distortionCoeffs" : np.array(data["distortionCoeffs"], dtype=np.float64),
+            "rmse" : data["rmse"],
+        }
+        
+        return params
+    
     except Exception as e:
         print(f"Could not load calibration results from file {folderPath}\calib.json. \n Exception {e}")
+        
+# def loadCalibrationParams(folderPath):
+#     try:
+#         fs = cv.FileStorage(pathlib.Path.joinpath(folderPath, "calib.json"), cv.FILE_STORAGE_READ)
+#         cameraMatrix = fs.getNode("cameraMatrix").mat()
+#         distortionCoeffs = fs.getNode("distortionCoeffs").mat()
+#         rmse = fs.getNode("rmse").real()
+#         fs.release()
+#         return rmse, cameraMatrix, distortionCoeffs
+#     except Exception as e:
+#         print(f"Could not load calibration results from file {folderPath}\calib.json. \n Exception {e}")
 
 def main():
     parser = getParser()
@@ -645,11 +676,9 @@ def main():
     print(f"---Saving calibration results to folder {args.resultsSavePath}---")
     saveCalibrationParams(args.resultsSavePath, reprojectionRMSE, cameraMatrix, distortionCoeffs)
     
-    # print(f"Loading calibration results from folder {args.resultsSavePath}")
-    # reprojectionRMSE, cameraMatrix, distortionCoeffs = loadCalibrationResults(args.resultsSavePath)
-    # print(f"Loaded monocular calibration RMSE: \n{reprojectionRMSE}")
-    # print(f"Loaded camera matrix: \n{cameraMatrix}")
-    # print(f"Loaded camera distortion coefficients: \n{distortionCoeffs}")
+    print(f"Loading calibration results from folder {args.resultsSavePath}")
+    calibrationParams = loadCalibrationParams(args.resultsSavePath)
+    print(f"Loaded calibration parameters: \n {calibrationParams}")
     
 if __name__ == "__main__":
     main()

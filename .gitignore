@@ -2,4 +2,5 @@
 */stereoCalibrationResults/*
 */depthEstimationResults/*
 */depthEstimationImages/*
+*/depthEstimationWithTrackingResults/*
 */data/*
