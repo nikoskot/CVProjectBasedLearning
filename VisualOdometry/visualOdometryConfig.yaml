@@ -1,0 +1,4 @@
+dataPath: C:\\Users\\Nikos\\Documents\\Repos\\CVProjectBasedLearning\\VisualOdometry\\data\\KITTI_sequence_2\\image_l
+gtPosesPath: C:\\Users\\Nikos\\Documents\\Repos\\CVProjectBasedLearning\\VisualOdometry\\data\\KITTI_sequence_2\\poses.txt
+resultsSavePath: C:\\Users\\Nikos\\Documents\\Repos\\CVProjectBasedLearning\\VisualOdometry\\VisualOdometryResults
+cameraParamsFile: C:\\Users\\Nikos\\Documents\\Repos\\CVProjectBasedLearning\\VisualOdometry\\data\\KITTI_sequence_2\\calib.txt
