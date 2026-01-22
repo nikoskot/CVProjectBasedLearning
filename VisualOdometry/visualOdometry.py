@@ -78,11 +78,97 @@ def formTransformation(R, t):
         T[:3, 3] = t
         return T
 
-def getMatches(t, images, orb, featuresMatcher):
+def harris_score(img, kp, block_size=7, k=0.04):
+    r = block_size // 2
+    x, y = int(kp.pt[0]), int(kp.pt[1])
+
+    if x < r or y < r or x >= img.shape[1] - r or y >= img.shape[0] - r:
+        return 0.0
+
+    patch = img[y - r:y + r + 1, x - r:x + r + 1]
+
+    Ix = cv.Sobel(patch, cv.CV_32F, 1, 0, ksize=3)
+    Iy = cv.Sobel(patch, cv.CV_32F, 0, 1, ksize=3)
+
+    a = np.sum(Ix * Ix)
+    b = np.sum(Ix * Iy)
+    c = np.sum(Iy * Iy)
+
+    det = a * c - b * b
+    trace = a + c
+    return det - k * trace * trace
+
+def getTiledFeatures(
+    image,
+    featureDetector,
+    max_features=3000,
+    grid_rows=8,
+    grid_cols=8,
+    pyramid_levels=3,
+    fast_threshold=10
+):
+    keypoints_out = []
+
+    # 1. Build pyramid
+    pyramid = [image]
+    for _ in range(1, pyramid_levels):
+        pyramid.append(cv.pyrDown(pyramid[-1]))
+
+    features_per_level = max_features // pyramid_levels
+
+    for lvl, img in enumerate(pyramid):
+
+        # 2. FAST over-detection
+        kps = featureDetector.detect(img, None)
+        if not kps:
+            continue
+
+        # 3. Harris ranking
+        for kp in kps:
+            kp.response = harris_score(img, kp)
+
+        # 4. Grid setup
+        h, w = img.shape
+        cell_h = h / grid_rows
+        cell_w = w / grid_cols
+        per_cell = max(1, features_per_level // (grid_rows * grid_cols))
+
+        grid = [[] for _ in range(grid_rows * grid_cols)]
+
+        # 5. Assign to grid
+        for kp in kps:
+            c = min(int(kp.pt[0] / cell_w), grid_cols - 1)
+            r = min(int(kp.pt[1] / cell_h), grid_rows - 1)
+            grid[r * grid_cols + c].append(kp)
+
+        # 6. Select top-K per cell
+        scale = 2 ** lvl
+        for cell in grid:
+            cell.sort(key=lambda x: x.response, reverse=True)
+            for kp in cell[:per_cell]:
+                kp.pt = (kp.pt[0] * scale, kp.pt[1] * scale)
+                kp.octave = lvl
+                keypoints_out.append(kp)
+
+    return keypoints_out
+
+def compute_orb_descriptors(image, keypoints):
+    orb = cv.ORB_create()
+    keypoints, descriptors = orb.compute(image, keypoints)
+    return keypoints, descriptors
+    
+def getMatches(t, images, featureDetector, featuresMatcher):
 
     # detect and compute ORB keypoints and descriptors for previous and current images
-    kp1, des1 = orb.detectAndCompute(images[t-1], None)
-    kp2, des2 = orb.detectAndCompute(images[t], None)
+    kp1, des1 = featureDetector.detectAndCompute(images[t-1], None)
+    kp2, des2 = featureDetector.detectAndCompute(images[t], None)
+    # detect and compute TILED ORB keypoints and descriptors for previous and current images
+    # kp1 = getTiledFeatures(images[t-1], featureDetector)
+    # kp2 = getTiledFeatures(images[t], featureDetector)
+    # kp1, des1 = compute_orb_descriptors(images[t-1], kp1)
+    # kp2, des2 = compute_orb_descriptors(images[t], kp2)
+    # print(des1)
+    # print(des2)
 
     matches = featuresMatcher.knnMatch(des1, des2, k=2)
 
@@ -170,8 +256,9 @@ def getPose(matchesPrev, matchesCurr, K, P):
 
 def visualOdometry(images, gtPoses, K, P):
     # Initialize detector and matcher
-    orb = cv.ORB_create(3000)
-    featuresMatcher = cv.BFMatcher()
+    featureDetector = cv.ORB_create(3000)
+    # featureDetector = cv.FastFeatureDetector_create()
+    # featuresMatcher = cv.BFMatcher()
     FLANN_INDEX_LSH = 6
     index_params = dict(algorithm=FLANN_INDEX_LSH, table_number=6, key_size=12, multi_probe_level=1)
     search_params = dict(checks=50)
@@ -189,9 +276,7 @@ def visualOdometry(images, gtPoses, K, P):
         if t == 0:
             currentPose = gtPoses[t]
         else:
-            print(f"Processing current frame {t}, previous frame {t-1}.")
-
-            matchesPrev, matchesCurr = getMatches(t, images, orb, featuresMatcher)
+            matchesPrev, matchesCurr = getMatches(t, images, featureDetector, featuresMatcher)
             transform = getPose(matchesPrev, matchesCurr, K, P)
             currentPose = np.matmul(currentPose, np.linalg.inv(transform))
 
