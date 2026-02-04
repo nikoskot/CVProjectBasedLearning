@@ -8,8 +8,9 @@ import cv2 as cv
 import sys
 import os
 import datetime
-import tqdm
+from tqdm import tqdm
 sys.path.append(str(Path(__file__).resolve().parent.parent))
+from frame import Frame
 
 
 def getParser():
@@ -58,8 +59,136 @@ def loadImages(folderPath):
     imagePaths = [os.path.join(folderPath, file) for file in sorted(os.listdir(folderPath))]
     return [cv.imread(path, cv.IMREAD_GRAYSCALE) for path in imagePaths]
 
+def formTransformation(R, t):
+        T = np.eye(4, dtype=np.float64)
+        T[:3, :3] = R
+        T[:3, 3] = t
+        return T
+    
+def decompEssentialMat(E, q1, q2, K, P):
+    R1, R2, t = cv.decomposeEssentialMat(E)
+    T1 = formTransformation(R1,np.ndarray.flatten(t))
+    T2 = formTransformation(R2,np.ndarray.flatten(t))
+    T3 = formTransformation(R1,np.ndarray.flatten(-t))
+    T4 = formTransformation(R2,np.ndarray.flatten(-t))
+    transformations = [T1, T2, T3, T4]
+    
+    # Homogenize K
+    K = np.concatenate((K, np.zeros((3,1))), axis = 1)
+
+    # List of projections
+    projections = [K @ T1, K @ T2, K @ T3, K @ T4]
+
+    np.set_printoptions(suppress=True)
+
+    # print ("\nTransform 1\n" +  str(T1))
+    # print ("\nTransform 2\n" +  str(T2))
+    # print ("\nTransform 3\n" +  str(T3))
+    # print ("\nTransform 4\n" +  str(T4))
+
+    positives = []
+    for Proj, T in zip(projections, transformations):
+        hom_Q1 = cv.triangulatePoints(P, Proj, q1.T, q2.T)
+        hom_Q2 = T @ hom_Q1
+        # Un-homogenize
+        Q1 = hom_Q1[:3, :] / hom_Q1[3, :]
+        Q2 = hom_Q2[:3, :] / hom_Q2[3, :]  
+
+        total_sum = sum(Q2[2, :] > 0) + sum(Q1[2, :] > 0)
+        relative_scale = np.mean(np.linalg.norm(Q1.T[:-1] - Q1.T[1:], axis=-1)/
+                                    np.linalg.norm(Q2.T[:-1] - Q2.T[1:], axis=-1))
+        positives.append(total_sum + relative_scale)
+        
+
+    # Decompose the Essential matrix using built in OpenCV function
+    # Form the 4 possible transformation matrix T from R1, R2, and t
+    # Create projection matrix using each T, and triangulate points hom_Q1
+    # Transform hom_Q1 to second camera using T to create hom_Q2
+    # Count how many points in hom_Q1 and hom_Q2 with positive z value
+    # Return R and t pair which resulted in the most points with positive z
+
+    max = np.argmax(positives)
+    if (max == 2):
+        # print(-t)
+        return R1, np.ndarray.flatten(-t)
+    elif (max == 3):
+        # print(-t)
+        return R2, np.ndarray.flatten(-t)
+    elif (max == 0):
+        # print(t)
+        return R1, np.ndarray.flatten(t)
+    elif (max == 1):
+        # print(t)
+        return R2, np.ndarray.flatten(t)
+
 def sfm(images, K, P):
-    print("OK")
+    frames = []
+    poses = []
+    points3d = []   # The 3d points that are created in the scene. List of Point3d objects
+    matches = [[None for _ in range(len(images))] for _ in range(len(images))]      # 2D array that contatins the feature matches between all images. It contains tuples of the coordinates of the feature in the first image the coordinates in the second image
+    matchesKeypointsIdxs = [[None for _ in range(len(images))] for _ in range(len(images))]     # Same as the above but it contatins the indexes of the keypoints, not their coordinates
+    
+    rr.log("/camera", rr.Pinhole(resolution=[images[0].shape[1], images[0].shape[0]], focal_length=[K[0,0], K[1,1]], principal_point=[K[0, 2], K[1, 2]]), static=True)
+    
+    # Calculate keypoints and descriptors for all images
+    print("Calculate keypoints and descriptors for all images")
+    featureDetector = cv.ORB_create(3000)
+    for imgIdx, img in tqdm(enumerate(images)):
+        keypoints, descriptors = featureDetector.detectAndCompute(img, None)
+        frame = Frame(img, imgIdx, keypoints, descriptors)
+        frames.append(frame)
+        rr.set_time("frameId", sequence=imgIdx)
+        rr.log("/camera", rr.Image(img))
+    
+    # Match features between all images
+    print("Match features between all images")
+    FLANN_INDEX_LSH = 6
+    index_params = dict(algorithm=FLANN_INDEX_LSH, table_number=6, key_size=12, multi_probe_level=1)
+    search_params = dict(checks=50)
+    featuresMatcher = cv.FlannBasedMatcher(indexParams=index_params, searchParams=search_params)
+    
+    for i in tqdm(range(len(frames))):
+        for j in range(i, len(frames)):
+            if i == j:
+                matches[i][j] = ()
+            else:
+                # Find matches between the two images
+                currentMatches = featuresMatcher.knnMatch(frames[i].descriptors, frames[j].descriptors, k=2)
+                # Apply ratio test
+                good = []
+                for m,n in currentMatches:
+                    if m.distance < 0.5*n.distance:
+                        good.append([m])
+                
+                # Save the coordinates of the matches
+                matches1 = np.float32([ frames[i].keypoints[m[0].queryIdx].pt for m in good ])
+                matches2 = np.float32([ frames[j].keypoints[m[0].trainIdx].pt for m in good ])
+                matches[i][j] = (matches1, matches2)
+                matches[j][i] = (matches2, matches1)
+                
+                # Save the indexes of the keypoints of the matches
+                matchesKeypointsIdxs1 = np.int32([ m[0].queryIdx for m in good ])
+                matchesKeypointsIdxs2 = np.int32([ m[0].trainIdx for m in good ])
+                matchesKeypointsIdxs[i][j] = (matchesKeypointsIdxs1, matchesKeypointsIdxs2)
+                matchesKeypointsIdxs[j][i] = (matchesKeypointsIdxs2, matchesKeypointsIdxs1)
+    
+    # Pose of the 1st image
+    poses.append(formTransformation(np.eye(3), np.zeros(3)))
+    rr.set_time("frameId", sequence=0)
+    rr.log("/camera", rr.Transform3D(mat3x3=poses[0][:3,:3], translation=poses[0][:3,3]))
+    
+    # Estimate Essential matrix for 1st and 2nd frame
+    E, mask = cv.findEssentialMat(matches[0][1][0], matches[0][1][1], K)
+    # Recover relative pose from Essential matrix
+    R, t = decompEssentialMat(E, matches[0][1][0], matches[0][1][1], K, P)
+    # Form the transformation matrix
+    relativePoseTransform = formTransformation(R, t.flatten())
+    # Get the pose of the 2nd camera
+    poses.append(np.matmul(poses[0], np.linalg.inv(relativePoseTransform)))
+    rr.set_time("frameId", sequence=1)
+    rr.log("/camera", rr.Transform3D(mat3x3=poses[1][:3,:3], translation=poses[1][:3,3]))
+    
+    pass
     
 def main():
     pareser = getParser()
