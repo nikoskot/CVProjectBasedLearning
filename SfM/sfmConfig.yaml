@@ -1,4 +1,4 @@
-dataPath: D:\Documents\Repos\CVProjectBasedLearning\SfM\data\images
+dataPath: SfM\data\images
 # gtPosesPath: D:\Documents\Repos\CVProjectBasedLearning\SfM\data\
-resultsSavePath: D:\Documents\Repos\CVProjectBasedLearning\SfM\sfmResults
-cameraParamsFile: D:\Documents\Repos\CVProjectBasedLearning\SfM\data\intrinsics.json
+resultsSavePath: SfM\sfmResults
+cameraParamsFile: SfM\data\intrinsics.json

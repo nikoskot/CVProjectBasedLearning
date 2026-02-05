@@ -135,6 +135,7 @@ def sfm(images, K, P):
     # Calculate keypoints and descriptors for all images
     print("Calculate keypoints and descriptors for all images")
     featureDetector = cv.ORB_create(5000)
+    # featureDetector = cv.SIFT_create(nfeatures=5000)
     for imgIdx, img in tqdm(enumerate(images)):
         keypoints, descriptors = featureDetector.detectAndCompute(img, None)
         frame = Frame(img, imgIdx, keypoints, descriptors)
@@ -160,25 +161,26 @@ def sfm(images, K, P):
                 good = []
                 for m,n in currentMatches:
                     if m.distance < 0.5*n.distance:
-                        good.append([m])
+                        good.append(m)
                 
                 # Save the coordinates of the matches
-                matches1 = np.float32([ frames[i].keypoints[m[0].queryIdx].pt for m in good ])
-                matches2 = np.float32([ frames[j].keypoints[m[0].trainIdx].pt for m in good ])
+                matches1 = np.float32([ frames[i].keypoints[m.queryIdx].pt for m in good ])
+                matches2 = np.float32([ frames[j].keypoints[m.trainIdx].pt for m in good ])
                 matches[i][j] = (matches1, matches2)
                 matches[j][i] = (matches2, matches1)
                 
                 # Save the indexes of the keypoints of the matches
-                matchesKeypointsIdxs1 = np.int32([ m[0].queryIdx for m in good ])
-                matchesKeypointsIdxs2 = np.int32([ m[0].trainIdx for m in good ])
+                matchesKeypointsIdxs1 = np.int32([ m.queryIdx for m in good ])
+                matchesKeypointsIdxs2 = np.int32([ m.trainIdx for m in good ])
                 matchesKeypointsIdxs[i][j] = (matchesKeypointsIdxs1, matchesKeypointsIdxs2)
                 matchesKeypointsIdxs[j][i] = (matchesKeypointsIdxs2, matchesKeypointsIdxs1)
     
     # Pose of the 1st image
     poses.append(formTransformation(np.eye(3), np.zeros(3)))
     rr.set_time("frameId", sequence=0)
-    rr.log("/camera", rr.Transform3D(mat3x3=poses[0][:3,:3], translation=poses[0][:3,3]))
-    rr.log("/annotatedImages", rr.Image(cv.drawKeypoints(images[0], frames[0].keypoints, 0, (0, 0, 255), flags=cv.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)))
+    # Rerun need camera -> world coordinate system transformation, so we need to invert the pose
+    rr.log("/camera", rr.Transform3D(mat3x3=np.linalg.inv(poses[0])[:3,:3], translation=np.linalg.inv(poses[0])[:3,3]))
+    rr.log("/annotatedImages", rr.Image(cv.drawKeypoints(images[0], frames[0].keypoints, 0, (255, 0, 0), flags=cv.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)))
     
     # Projection matrix of the 1st image
     projections.append(P)
@@ -187,13 +189,15 @@ def sfm(images, K, P):
     E, mask = cv.findEssentialMat(matches[0][1][0], matches[0][1][1], K)
     # Recover relative pose from Essential matrix
     R, t = decompEssentialMat(E, matches[0][1][0], matches[0][1][1], K, P)
-    # Form the transformation matrix
+    # Form the transformation matrix. This is world -> camera coordinate system
     relativePoseTransform = formTransformation(R, t.flatten())
     # Get the pose of the 2nd camera
-    poses.append(np.matmul(poses[0], np.linalg.inv(relativePoseTransform)))
+    # poses.append(np.matmul(poses[0], np.linalg.inv(relativePoseTransform)))
+    poses.append(relativePoseTransform @ poses[0]) 
     rr.set_time("frameId", sequence=1)
-    rr.log("/camera", rr.Transform3D(mat3x3=poses[1][:3,:3], translation=poses[1][:3,3]))
-    rr.log("/annotatedImages", rr.Image(cv.drawKeypoints(images[1], frames[1].keypoints, 0, (0, 0, 255), flags=cv.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)))
+    # Rerun need camera -> world coordinate system transformation, so we need to invert the pose
+    rr.log("/camera", rr.Transform3D(mat3x3=np.linalg.inv(poses[1])[:3,:3], translation=np.linalg.inv(poses[1])[:3,3]))
+    rr.log("/annotatedImages", rr.Image(cv.drawKeypoints(images[1], frames[1].keypoints, 0, (255, 0, 0), flags=cv.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)))
     # Projection matrix of the 2nd image
     projections.append(np.concatenate((K, np.zeros((3,1))), axis = 1) @ poses[1])
     
