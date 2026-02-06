@@ -207,7 +207,7 @@ def sfm(images, K, P):
     for i in range(X.shape[1]):
         # Create a point3d object for the 3d point
         point3dIdx = len(points3d)
-        point3d = Point3d(X[:, i], point3dIdx)
+        point3d = Point3d(X[:, i], point3dIdx, 0)
         # Add the id of the frames and the keypoints that the 3d point is observed at
         point3d.observedAt[0] = matchesKeypointsIdxs[0][1][0][i]
         point3d.observedAt[1] = matchesKeypointsIdxs[0][1][1][i]
@@ -216,27 +216,48 @@ def sfm(images, K, P):
         frames[1].observations[matchesKeypointsIdxs[0][1][1][i]] = point3dIdx
         
         points3d.append(point3d)
-    
+    rr.set_time("frameId", sequence=0)
+    rr.log("/pointCloud/points", rr.Points3D([p.coords3d for p in points3d], colors=[255, 255, 255, 255], radii=0.01))
+    rr.set_time("frameId", sequence=1)
+    rr.log("/pointCloud/points", rr.Points3D([p.coords3d for p in points3d], colors=[255, 255, 255, 255], radii=0.01))
     
     # For each next frame
-    for frameIdx in tqdm(range(2, 6)):
+    for frameIdx in tqdm(range(2, len(frames))):
         # Find the matched features/keyppints that are observed in the already reconstructed 3D points. Look only on the previous frame for now
         keypointsIndexesWithIndirect3DPoint = []
+        pnp_2d = []
+        pnp_3d = []
+        pnp_pairs = []  # (kp_idx, point3d_idx)
         for prevFrameIdx in range(frameIdx-1, -1, -1):
             for i, j in zip(matchesKeypointsIdxs[frameIdx][prevFrameIdx][0], matchesKeypointsIdxs[frameIdx][prevFrameIdx][1]):
-                if j in frames[prevFrameIdx].observations:
+                if (j in frames[prevFrameIdx].observations) and (points3d[frames[prevFrameIdx].observations[j]].createdInFrame <= frameIdx - 2):
                     keypointsIndexesWithIndirect3DPoint.append(i)
                     # Set the observation of the 3D point in the current frame
                     point3dIdx = frames[prevFrameIdx].observations[j]
-                    points3d[point3dIdx].observedAt[frameIdx] = i
+                    # points3d[point3dIdx].observedAt[frameIdx] = i
                     # Add the frame observation
-                    frames[frameIdx].observations[i] = point3dIdx
+                    # frames[frameIdx].observations[i] = point3dIdx
+                    
+                    pnp_3d.append(points3d[point3dIdx].coords3d)
+                    pnp_2d.append(frames[frameIdx].keypoints[i].pt)
+                    pnp_pairs.append((i, point3dIdx))
         
         # Use solvePnPRansac to estimate the pose of the current frame using the 3D-2D correspondences
-        X3d = np.float32([points3d[frames[frameIdx].observations[i]].coords3d for i in frames[frameIdx].observations])
-        x2d = np.float32([frames[frameIdx].keypoints[i].pt for i in frames[frameIdx].observations])
-        _, rvec, tvec, inliers = cv.solvePnPRansac(objectPoints=X3d, imagePoints=x2d, cameraMatrix=K, distCoeffs=None, reprojectionError=4.0, confidence=0.999)
+        # X3d = np.float32([points3d[frames[frameIdx].observations[i]].coords3d for i in frames[frameIdx].observations])
+        # x2d = np.float32([frames[frameIdx].keypoints[i].pt for i in frames[frameIdx].observations])
+        # _, rvec, tvec, inliers = cv.solvePnPRansac(objectPoints=X3d, imagePoints=x2d, cameraMatrix=K, distCoeffs=None, reprojectionError=4.0, confidence=0.999)
+        print(len(pnp_3d))
+        retval, rvec, tvec, inliers = cv.solvePnPRansac(objectPoints=np.float32(pnp_3d), imagePoints=np.float32(pnp_2d), cameraMatrix=K, distCoeffs=None, reprojectionError=6.0, confidence=0.999)
+        if not retval or inliers is None or len(inliers) < 6:
+            print(f"PnP failed — skipping frame {frameIdx}")
+            poses.append(None)
+            projections.append(None)
+            continue
         R, _ = cv.Rodrigues(rvec)
+        for idx in inliers.ravel():
+            kp_idx, point3d_idx = pnp_pairs[idx]
+            frames[frameIdx].observations[kp_idx] = point3d_idx
+            points3d[point3d_idx].observedAt[frameIdx] = kp_idx
         print(f"Frame {frameIdx}: ")
         print(f"R = \n{R}")
         print(f"t = \n{tvec}")
@@ -252,9 +273,11 @@ def sfm(images, K, P):
         # Get the matched keypoints ids that did not have indirect 3D point and try to create new 3D points with them. Look only on the previous frame for now
         keypointsIndexesWithoutIndirect3DPoint = []
         for prevFrameIdx in range(frameIdx-1, -1, -1):
+            if poses[prevFrameIdx] is None:
+                continue
             matchesForNew3DPoints = []
             for i, j in zip(matchesKeypointsIdxs[frameIdx][prevFrameIdx][1], matchesKeypointsIdxs[frameIdx][prevFrameIdx][0]):
-                if i not in frames[frameIdx].observations:
+                if j not in frames[frameIdx].observations:
                     matchesForNew3DPoints.append([frames[prevFrameIdx].keypoints[i].pt, frames[frameIdx].keypoints[j].pt])
                     keypointsIndexesWithoutIndirect3DPoint.append(j)
             if len(matchesForNew3DPoints) > 0:
@@ -262,9 +285,26 @@ def sfm(images, K, P):
                 X_h = cv.triangulatePoints(projections[prevFrameIdx], projections[frameIdx], matchesForNew3DPoints[:, 0].T, matchesForNew3DPoints[:, 1].T)
                 X = X_h[:3, :] / X_h[3, :]
                 for i in range(X.shape[1]):
+                    X_point = X[:, i]
+                    
+                    # In camera coordinates
+                    X_cam_prev = poses[prevFrameIdx] @ np.hstack([X_point, 1.0])
+                    X_cam_curr = poses[frameIdx] @ np.hstack([X_point, 1.0])
+                    # Cheirality check
+                    if X_cam_prev[2] <= 0 or X_cam_curr[2] <= 0:
+                        continue  # discard point
+                    
+                    def reprojection_error(X, x, K, T):
+                        Xc = T @ np.hstack([X, 1.0])
+                        x_proj = K @ (Xc[:3] / Xc[2])
+                        return np.linalg.norm(x_proj[:2] - x)
+                    # Reprojection error
+                    if reprojection_error(X_point, matchesForNew3DPoints[i, 0], K, poses[prevFrameIdx]) > 2.0 or reprojection_error(X_point, matchesForNew3DPoints[i, 1], K, poses[frameIdx]) > 2.0:
+                        continue
+                    
                     # Create a point3d object for the 3d point
                     point3dIdx = len(points3d)
-                    point3d = Point3d(X[:, i], point3dIdx)
+                    point3d = Point3d(X[:, i], point3dIdx, frameIdx)
                     # Add the id of the frames and the keypoints that the 3d point is observed at
                     point3d.observedAt[frameIdx] = matchesKeypointsIdxs[frameIdx][prevFrameIdx][0][i]
                     point3d.observedAt[prevFrameIdx] = matchesKeypointsIdxs[frameIdx][prevFrameIdx][1][i]
@@ -274,7 +314,7 @@ def sfm(images, K, P):
 
                     points3d.append(point3d)
 
-    rr.log("/pointCloud/points", rr.Points3D([p.coords3d for p in points3d], colors=[255, 255, 255, 255], radii=0.01), static=True)
+        rr.log("/pointCloud/points", rr.Points3D([p.coords3d for p in points3d], colors=[255, 255, 255, 255], radii=0.01))
         
     pass
     
