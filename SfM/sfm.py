@@ -96,8 +96,9 @@ def decompEssentialMat(E, q1, q2, K, P):
         Q2 = hom_Q2[:3, :] / hom_Q2[3, :]  
 
         total_sum = sum(Q2[2, :] > 0) + sum(Q1[2, :] > 0)
-        relative_scale = np.mean(np.linalg.norm(Q1.T[:-1] - Q1.T[1:], axis=-1)/
-                                    np.linalg.norm(Q2.T[:-1] - Q2.T[1:], axis=-1))
+        # relative_scale = np.mean(np.linalg.norm(Q1.T[:-1] - Q1.T[1:], axis=-1)/
+        #                             np.linalg.norm(Q2.T[:-1] - Q2.T[1:], axis=-1))
+        relative_scale = 0
         positives.append(total_sum + relative_scale)
         
 
@@ -124,43 +125,48 @@ def decompEssentialMat(E, q1, q2, K, P):
 
 def sfm(images, K, P):
     frames = []
-    poses = []
+    poses = []      # Poses should be world -> camera
     points3d = []   # The 3d points that are created in the scene. List of Point3d objects
     matches = [[None for _ in range(len(images))] for _ in range(len(images))]      # 2D array that contatins the feature matches between all images. It contains tuples of the coordinates of the feature in the first image the coordinates in the second image
     matchesKeypointsIdxs = [[None for _ in range(len(images))] for _ in range(len(images))]     # Same as the above but it contatins the indexes of the keypoints, not their coordinates
     projections = []
      
-    rr.log("/camera", rr.Pinhole(resolution=[images[0].shape[1], images[0].shape[0]], focal_length=[K[0,0], K[1,1]], principal_point=[K[0, 2], K[1, 2]]), static=True)
+    rr.log("/camera/image", rr.Pinhole(resolution=[images[0].shape[1], images[0].shape[0]], focal_length=[K[0,0], K[1,1]], principal_point=[K[0, 2], K[1, 2]]), static=True)
     
     # Calculate keypoints and descriptors for all images
     print("Calculate keypoints and descriptors for all images")
-    featureDetector = cv.ORB_create(5000)
-    # featureDetector = cv.SIFT_create(nfeatures=5000)
+    # featureDetector = cv.ORB_create(5000)
+    featureDetector = cv.SIFT_create(nfeatures=5000)
     for imgIdx, img in tqdm(enumerate(images)):
         keypoints, descriptors = featureDetector.detectAndCompute(img, None)
         frame = Frame(img, imgIdx, keypoints, descriptors)
         frames.append(frame)
         rr.set_time("frameId", sequence=imgIdx)
-        rr.log("/camera", rr.Image(img))
+        rr.log("/camera/image", rr.Image(img))
+        rr.log("/annotatedImages", rr.Image(cv.drawKeypoints(img, keypoints, 0, (255, 0, 0), flags=cv.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)))
+        rr.log("/scalarsLogs/keypointsNumber", rr.Scalars(len(keypoints)))
     
     # Match features between all images
     print("Match features between all images")
-    FLANN_INDEX_LSH = 6
-    index_params = dict(algorithm=FLANN_INDEX_LSH, table_number=6, key_size=12, multi_probe_level=1)
-    search_params = dict(checks=50)
+    # FLANN_INDEX_LSH = 6
+    # index_params = dict(algorithm=FLANN_INDEX_LSH, table_number=6, key_size=12, multi_probe_level=1)
+    # search_params = dict(checks=50)
+    FLANN_INDEX_KDTREE = 1
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+    search_params = dict(checks=100)
     featuresMatcher = cv.FlannBasedMatcher(indexParams=index_params, searchParams=search_params)
     
     for i in tqdm(range(len(frames))):
         for j in range(i, len(frames)):
             if i == j:
-                matches[i][j] = ()
+                matches[i][j] = ([], [])
             else:
                 # Find matches between the two images
                 currentMatches = featuresMatcher.knnMatch(frames[i].descriptors, frames[j].descriptors, k=2)
                 # Apply ratio test
                 good = []
                 for m,n in currentMatches:
-                    if m.distance < 0.5*n.distance:
+                    if m.distance < 0.7*n.distance:
                         good.append(m)
                 
                 # Save the coordinates of the matches
@@ -174,6 +180,9 @@ def sfm(images, K, P):
                 matchesKeypointsIdxs2 = np.int32([ m.trainIdx for m in good ])
                 matchesKeypointsIdxs[i][j] = (matchesKeypointsIdxs1, matchesKeypointsIdxs2)
                 matchesKeypointsIdxs[j][i] = (matchesKeypointsIdxs2, matchesKeypointsIdxs1)
+                
+        rr.set_time("frameId", sequence=i)
+        rr.log("/matchedKeypointsNumber", rr.BarChart([len(matches[i][j][0]) for j in range(len(matches[i]))]))
     
     # Pose of the 1st image
     poses.append(formTransformation(np.eye(3), np.zeros(3)))
@@ -191,6 +200,9 @@ def sfm(images, K, P):
     R, t = decompEssentialMat(E, matches[0][1][0], matches[0][1][1], K, P)
     # Form the transformation matrix. This is world -> camera coordinate system
     relativePoseTransform = formTransformation(R, t.flatten())
+    print(f"---Frame {1}---")
+    print(f"R = \n{R}")
+    print(f"t = \n{t}")
     # Get the pose of the 2nd camera
     # poses.append(np.matmul(poses[0], np.linalg.inv(relativePoseTransform)))
     poses.append(relativePoseTransform @ poses[0]) 
@@ -223,31 +235,23 @@ def sfm(images, K, P):
     
     # For each next frame
     for frameIdx in tqdm(range(2, len(frames))):
+        print(f"---Frame {frameIdx}---")
         # Find the matched features/keyppints that are observed in the already reconstructed 3D points. Look only on the previous frame for now
-        keypointsIndexesWithIndirect3DPoint = []
-        pnp_2d = []
-        pnp_3d = []
-        pnp_pairs = []  # (kp_idx, point3d_idx)
+        pnp2d = []
+        pnp3d = []
+        pnpPairs = []  # (kp_idx, point3d_idx)
         for prevFrameIdx in range(frameIdx-1, -1, -1):
             for i, j in zip(matchesKeypointsIdxs[frameIdx][prevFrameIdx][0], matchesKeypointsIdxs[frameIdx][prevFrameIdx][1]):
                 if (j in frames[prevFrameIdx].observations) and (points3d[frames[prevFrameIdx].observations[j]].createdInFrame <= frameIdx - 2):
-                    keypointsIndexesWithIndirect3DPoint.append(i)
                     # Set the observation of the 3D point in the current frame
                     point3dIdx = frames[prevFrameIdx].observations[j]
-                    # points3d[point3dIdx].observedAt[frameIdx] = i
-                    # Add the frame observation
-                    # frames[frameIdx].observations[i] = point3dIdx
-                    
-                    pnp_3d.append(points3d[point3dIdx].coords3d)
-                    pnp_2d.append(frames[frameIdx].keypoints[i].pt)
-                    pnp_pairs.append((i, point3dIdx))
+                    pnp3d.append(points3d[point3dIdx].coords3d)
+                    pnp2d.append(frames[frameIdx].keypoints[i].pt)
+                    pnpPairs.append((i, point3dIdx))
         
         # Use solvePnPRansac to estimate the pose of the current frame using the 3D-2D correspondences
-        # X3d = np.float32([points3d[frames[frameIdx].observations[i]].coords3d for i in frames[frameIdx].observations])
-        # x2d = np.float32([frames[frameIdx].keypoints[i].pt for i in frames[frameIdx].observations])
-        # _, rvec, tvec, inliers = cv.solvePnPRansac(objectPoints=X3d, imagePoints=x2d, cameraMatrix=K, distCoeffs=None, reprojectionError=4.0, confidence=0.999)
-        print(len(pnp_3d))
-        retval, rvec, tvec, inliers = cv.solvePnPRansac(objectPoints=np.float32(pnp_3d), imagePoints=np.float32(pnp_2d), cameraMatrix=K, distCoeffs=None, reprojectionError=6.0, confidence=0.999)
+        print(len(pnp3d))
+        retval, rvec, tvec, inliers = cv.solvePnPRansac(objectPoints=np.float32(pnp3d), imagePoints=np.float32(pnp2d), cameraMatrix=K, distCoeffs=None, reprojectionError=4.0, confidence=0.999)
         if not retval or inliers is None or len(inliers) < 6:
             print(f"PnP failed — skipping frame {frameIdx}")
             poses.append(None)
@@ -255,14 +259,13 @@ def sfm(images, K, P):
             continue
         R, _ = cv.Rodrigues(rvec)
         for idx in inliers.ravel():
-            kp_idx, point3d_idx = pnp_pairs[idx]
-            frames[frameIdx].observations[kp_idx] = point3d_idx
-            points3d[point3d_idx].observedAt[frameIdx] = kp_idx
-        print(f"Frame {frameIdx}: ")
+            kpIdx, point3dIdx = pnpPairs[idx]
+            frames[frameIdx].observations[kpIdx] = point3dIdx
+            points3d[point3dIdx].observedAt[frameIdx] = kpIdx
+            
         print(f"R = \n{R}")
         print(f"t = \n{tvec}")
         absolutePoseTransform = formTransformation(R, tvec.flatten())
-        print(f"T = \n{absolutePoseTransform}")
         poses.append(absolutePoseTransform)
         rr.set_time("frameId", sequence=frameIdx)
         # Rerun need camera -> world coordinate system transformation, so we need to invert the pose
@@ -271,15 +274,15 @@ def sfm(images, K, P):
         projections.append(np.concatenate((K, np.zeros((3,1))), axis = 1) @ poses[frameIdx])
 
         # Get the matched keypoints ids that did not have indirect 3D point and try to create new 3D points with them. Look only on the previous frame for now
-        keypointsIndexesWithoutIndirect3DPoint = []
         for prevFrameIdx in range(frameIdx-1, -1, -1):
             if poses[prevFrameIdx] is None:
                 continue
+            
             matchesForNew3DPoints = []
             for i, j in zip(matchesKeypointsIdxs[frameIdx][prevFrameIdx][1], matchesKeypointsIdxs[frameIdx][prevFrameIdx][0]):
                 if j not in frames[frameIdx].observations:
                     matchesForNew3DPoints.append([frames[prevFrameIdx].keypoints[i].pt, frames[frameIdx].keypoints[j].pt])
-                    keypointsIndexesWithoutIndirect3DPoint.append(j)
+                    
             if len(matchesForNew3DPoints) > 0:
                 matchesForNew3DPoints = np.float32(matchesForNew3DPoints)
                 X_h = cv.triangulatePoints(projections[prevFrameIdx], projections[frameIdx], matchesForNew3DPoints[:, 0].T, matchesForNew3DPoints[:, 1].T)
@@ -315,9 +318,7 @@ def sfm(images, K, P):
                     points3d.append(point3d)
 
         rr.log("/pointCloud/points", rr.Points3D([p.coords3d for p in points3d], colors=[255, 255, 255, 255], radii=0.01))
-        
-    pass
-    
+            
 def main():
     pareser = getParser()
     args = pareser.parse_args()
