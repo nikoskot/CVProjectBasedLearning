@@ -1,0 +1,4 @@
+dataPath: SimpleSfM\data\images
+# gtPosesPath: D:\Documents\Repos\CVProjectBasedLearning\SfM\data\
+resultsSavePath: SimpleSfM\sfmResults
+cameraParamsFile: SimpleSfM\data\intrinsics.json
